@@ -1,0 +1,37 @@
+# Python bytecode, caches, test output
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Packaging and virtual environments
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# Jupyter and IDE state
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Logs, generated results, and local configuration
+*.log
+/logs/
+/outputs/
+/results/
+/data/
+/configs/*.local.yaml
+/configs/*.private.yaml
+
+# Operating-system files
+.DS_Store
+Thumbs.db
