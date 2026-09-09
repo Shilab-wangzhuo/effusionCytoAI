@@ -1,7 +1,12 @@
 """Shared classification configuration."""
 
-CANCER_CLASSES = ['Breast', 'Gastrointestinal', 'Gynecologic', 'Respiratory', 'Mesothelioma']
+# Keep this order identical to torchvision.datasets.ImageFolder sorting.
+CANCER_CLASSES = [
+    'Gastrointestinal_Breast',
+    'Gynecologic',
+    'Lung',
+    'Mesothelioma',
+]
 NUM_CLASSES = len(CANCER_CLASSES)
 CLASS_TO_IDX = {class_name: idx for idx, class_name in enumerate(CANCER_CLASSES)}
 IDX_TO_CLASS = {idx: class_name for class_name, idx in CLASS_TO_IDX.items()}
-

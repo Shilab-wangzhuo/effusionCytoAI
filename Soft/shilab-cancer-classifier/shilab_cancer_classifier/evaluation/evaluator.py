@@ -30,7 +30,6 @@ from shilab_cancer_classifier.training.preprocessing import (
 )
 
 # ──────────────────────────────────────────────────────────────
-# 内部工具函数
 # ──────────────────────────────────────────────────────────────
 
 def _extract_logits(outputs):
@@ -89,10 +88,8 @@ def _find_model_path(model_dir, model_name, fold):
 
 
 # ──────────────────────────────────────────────────────────────
-# ROC 曲线核心函数
 # ──────────────────────────────────────────────────────────────
 
-# 每个类别的固定颜色，最多支持 10 类
 _CLASS_COLORS = [
     '#e41a1c', '#377eb8', '#4daf4a', '#984ea3',
     '#ff7f00', '#a65628', '#f781bf', '#999999',
@@ -101,29 +98,7 @@ _CLASS_COLORS = [
 
 
 def _compute_ovr_roc(prob_csv_path, class_names):
-    """
-    读取概率 CSV，计算每个类别的 OvR ROC 曲线及 macro 平均曲线。
-
-    参数
-    ----
-    prob_csv_path : str
-        由 predict_and_save_probabilities 保存的 *_probabilities.csv 路径。
-    class_names : list[str]
-        类别名称列表，顺序须与训练时一致。
-
-    返回
-    ----
-    dict，结构：
-        {
-          'class_curves': {
-              class_name: {'fpr': ..., 'tpr': ..., 'auc': ...},
-              ...
-          },
-          'macro': {'fpr': ..., 'tpr': ..., 'auc': ...},
-          'n_samples': int,
-        }
-    或 None（文件不存在 / 解析失败）。
-    """
+    """Compute one-versus-rest ROC curves."""
     if not os.path.exists(prob_csv_path):
         return None
 
@@ -133,7 +108,6 @@ def _compute_ovr_roc(prob_csv_path, class_names):
         print(f"  [ROC] Failed to read {prob_csv_path}: {exc}")
         return None
 
-    # 自动识别 prob_ 列
     prob_cols = [c for c in df.columns if c.startswith('prob_')]
     if len(prob_cols) != len(class_names):
         print(
@@ -146,7 +120,6 @@ def _compute_ovr_roc(prob_csv_path, class_names):
     # label_binarize: shape (n_samples, n_classes)
     bin_labels = label_binarize(true_labels, classes=list(range(len(class_names))))
 
-    # 统一插值用的 FPR 轴（300 点）
     mean_fpr = np.linspace(0, 1, 300)
     all_tpr_interp = []
 
@@ -155,7 +128,6 @@ def _compute_ovr_roc(prob_csv_path, class_names):
         y_true_bin = bin_labels[:, idx]
         y_score = df[prob_col].values
 
-        # 若该类在此数据集中只有一种标签，跳过（无法计算 ROC）
         if len(np.unique(y_true_bin)) < 2:
             print(f"  [ROC] Class '{cls_name}' has only one label value, skipped.")
             continue
@@ -164,7 +136,6 @@ def _compute_ovr_roc(prob_csv_path, class_names):
         roc_auc = auc(fpr, tpr)
         class_curves[cls_name] = {'fpr': fpr, 'tpr': tpr, 'auc': roc_auc}
 
-        # 插值到统一 FPR 轴，用于 macro 平均
         tpr_interp = np.interp(mean_fpr, fpr, tpr)
         tpr_interp[0] = 0.0
         all_tpr_interp.append(tpr_interp)
@@ -172,7 +143,6 @@ def _compute_ovr_roc(prob_csv_path, class_names):
     if not all_tpr_interp:
         return None
 
-    # Macro 平均曲线
     mean_tpr = np.mean(all_tpr_interp, axis=0)
     mean_tpr[-1] = 1.0
     macro_auc = auc(mean_fpr, mean_tpr)
@@ -185,17 +155,7 @@ def _compute_ovr_roc(prob_csv_path, class_names):
 
 
 def _draw_roc_axes(ax, roc_data, class_names, title, colors):
-    """
-    在给定的 Axes 上绘制 OvR ROC 曲线。
-
-    参数
-    ----
-    ax        : matplotlib Axes
-    roc_data  : _compute_ovr_roc 的返回值（可为 None）
-    class_names : list[str]
-    title     : 子图标题
-    colors    : list[str]，与 class_names 等长
-    """
+    """Draw ROC axes and baseline annotations."""
     # ax.plot([0, 1], [0, 1], 'k--', lw=1.2, label='Random (AUC = 0.50)', zorder=1)
 
     if roc_data is None:
@@ -209,7 +169,6 @@ def _draw_roc_axes(ax, roc_data, class_names, title, colors):
                 continue
             curve = class_curves[cls_name]
             color = colors[idx % len(colors)]
-            # 缩短显示名（去掉下划线，首字母大写）
             display_name = cls_name.replace('_', ' ').title()
             ax.plot(
                 curve['fpr'], curve['tpr'],
@@ -217,7 +176,6 @@ def _draw_roc_axes(ax, roc_data, class_names, title, colors):
                 label=f'{display_name} (AUC = {curve["auc"]:.4f})',
             )
 
-        # Macro 平均
         # macro = roc_data['macro']
         # ax.plot(
         #     macro['fpr'], macro['tpr'],
@@ -243,43 +201,15 @@ def plot_roc_curve_multiclass(
     figsize_per_fold=(18, 6),
     dpi=200,
 ):
-    """
-    为指定模型的每一折绘制 Train / Val / Test 三合一 OvR ROC 曲线图，
-    并额外生成一张汇总所有折 macro AUC 的折线图。
-
-    参数
-    ----
-    model_results_dir : str
-        该模型的结果目录，内含 fold_1/, fold_2/, ... 子目录。
-        即 output_dir/<model_name>/ 这一层。
-    model_name : str
-        模型名称，用于图标题和文件命名。
-    class_names : list[str]
-        类别名称列表，顺序须与训练时一致。
-    num_folds : int
-        折数，默认 5。
-    save_dir : str | None
-        图片保存目录。若为 None，默认保存到
-        model_results_dir/roc_curves/。
-    figsize_per_fold : tuple
-        每折三合一图的尺寸，默认 (18, 6)。
-    dpi : int
-        图片分辨率，默认 200。
-
-    返回
-    ----
-    pd.DataFrame
-        各折各数据集各类别 AUC 汇总表，同时保存为 CSV。
-    """
+    """Plot multiclass ROC curves."""
     if save_dir is None:
         save_dir = os.path.join(model_results_dir, 'roc_curves')
     os.makedirs(save_dir, exist_ok=True)
 
     colors = _CLASS_COLORS[:len(class_names)]
     datasets_info = ['train', 'val', 'test']
-    auc_records = []   # 用于汇总 CSV
+    auc_records = []
 
-    # ── 每折：绘制三合一图 ──────────────────────────────────────
     for fold in range(1, num_folds + 1):
         fold_dir = os.path.join(model_results_dir, f'fold_{fold}')
 
@@ -298,7 +228,6 @@ def plot_roc_curve_multiclass(
                 colors=colors,
             )
 
-            # 收集 AUC 数值
             if roc_data is not None:
                 row = {
                     'model': model_name,
@@ -317,7 +246,6 @@ def plot_roc_curve_multiclass(
         plt.close()
         print(f"[ROC] Fold {fold} figure saved → {fold_save_path}")
 
-    # ── 汇总图：各折 macro AUC 折线图 ──────────────────────────
     if auc_records:
         summary_df = pd.DataFrame(auc_records)
 
@@ -336,7 +264,6 @@ def plot_roc_curve_multiclass(
                 style, color=color, lw=2, ms=7,
                 label=f'{label} Macro AUC',
             )
-            # 标注数值
             for _, row in sub.iterrows():
                 ax.annotate(
                     f'{row["macro_auc"]:.4f}',
@@ -359,7 +286,6 @@ def plot_roc_curve_multiclass(
         plt.close()
         print(f"[ROC] Macro AUC summary figure saved → {summary_fig_path}")
 
-        # 保存 AUC 数值 CSV
         auc_csv_path = os.path.join(save_dir, f'{model_name}_roc_auc_summary.csv')
         summary_df.to_csv(auc_csv_path, index=False, encoding='utf-8-sig')
         print(f"[ROC] AUC summary CSV saved → {auc_csv_path}")
@@ -371,7 +297,6 @@ def plot_roc_curve_multiclass(
 
 
 # ──────────────────────────────────────────────────────────────
-# 预测与保存
 # ──────────────────────────────────────────────────────────────
 
 def predict_and_save_probabilities(
@@ -473,7 +398,6 @@ def predict_and_save_probabilities(
 
 
 # ──────────────────────────────────────────────────────────────
-# 单模型评估
 # ──────────────────────────────────────────────────────────────
 
 def evaluate_single_model(
@@ -496,7 +420,7 @@ def evaluate_single_model(
     model_results_dir = os.path.join(output_dir, model_name)
     os.makedirs(model_results_dir, exist_ok=True)
     all_results = []
-    class_names_used = None   # 记录实际类别名，供 ROC 使用
+    class_names_used = None
 
     for fold in range(1, num_folds + 1):
         print(f"\n{'=' * 60}")
@@ -583,7 +507,6 @@ def evaluate_single_model(
         print(f"Warning: no folds were evaluated for {model_name}")
         return None
 
-    # ── 汇总指标 CSV ──────────────────────────────────────────
     results_df = pd.DataFrame(all_results)
     numeric_cols = results_df.select_dtypes(include=[np.number]).columns
     avg_result = results_df[numeric_cols].mean().to_dict()
@@ -601,7 +524,6 @@ def evaluate_single_model(
     pd.DataFrame([avg_result]).to_csv(cv_results_path, index=False, encoding='utf-8-sig')
     print(f"Cross-validation summary saved to {cv_results_path}")
 
-    # ── 绘制 OvR ROC 曲线 ────────────────────────────────────
     if class_names_used is not None:
         print(f"\n[ROC] Plotting OvR ROC curves for {model_name}...")
         try:
@@ -619,7 +541,6 @@ def evaluate_single_model(
 
 
 # ──────────────────────────────────────────────────────────────
-# 全模型评估
 # ──────────────────────────────────────────────────────────────
 
 def evaluate_all_models(
@@ -694,7 +615,6 @@ def evaluate_all_models(
 
 
 # ──────────────────────────────────────────────────────────────
-# 汇总报告
 # ──────────────────────────────────────────────────────────────
 
 def _save_evaluation_summary(all_model_results, output_dir):

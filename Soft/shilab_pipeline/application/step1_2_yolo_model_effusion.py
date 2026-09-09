@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Step1 + Step2 合并优化版（胸腹水）：SVS → OpenSlide内存patch → YOLO batch推理 → 原Step2输出结构
+Combined Step 1 and Step 2 streaming inference for pleural/peritoneal effusion cytology:
+SVS -> in-memory OpenSlide patches -> batched YOLO inference -> Step 2-compatible output.
 
-目标：
-  1. 不再把中间 patch 保存为 png，减少 Step1/Step2 重复 IO
-  2. YOLO 支持 batch 推理，提高 GPU 利用率
-  3. 保留原 step2.yolo_modele_infer_effusion.py 的医学处理逻辑：
-     - single_cell 完整性过滤（贴边过滤）
-     - single_cell 小细胞过滤（不裁剪保存、不写入JSON，但仍统计）
-     - conf 筛选
-     - crop_padding 裁剪
-     - JSON 保存（_all.json / _conf{conf}.json）
-     - result/{class_name}/ 输出结构
-  4. 输出保持与原 Step2 一致，确保 Step3 可直接衔接
-
-输出结构：
-  output_dir/
-    {sample_name}/
-      annotation/          ← 仅 --save_annotation 时生成
-      json/
-      result/
-        {class_name}/      ← Step3 输入目录
 """
 import os
 seed = 42
@@ -52,80 +34,76 @@ torch.backends.cudnn.benchmark     = False
 torch.backends.cudnn.deterministic = True
 torch.use_deterministic_algorithms(True, warn_only=True)
 
-# ============================================================
-# 参数解析
-# ============================================================
+# Reproducibility configuration
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="SVS流式YOLO推理（胸腹水）：合并Step1和Step2，避免中间patch落盘",
+        description="Streaming SVS YOLO inference (effusion): combines Steps 1 and 2 without writing intermediate patches",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    # ── 路径参数 ──────────────────────────────────────────────
+    # Path arguments
     parser.add_argument("--input_file", type=str, required=True,
-                        help="输入单个SVS文件路径")
+                        help="Path to a single input SVS file")
     parser.add_argument("--output_dir", type=str, required=True,
-                        help="输出结果根目录，例如 data_svsModle")
+                        help="Root directory for inference outputs, e.g. data_svsModle")
     parser.add_argument("--model_path", type=str, required=True,
-                        help="YOLO模型权重路径")
+                        help="Path to YOLO model weights")
 
-    # ── Step1 patch 参数 ──────────────────────────────────────
+    # Step 1 patch parameters
     parser.add_argument("--size", type=int, default=1024,
-                        help="patch大小")
+                        help="Patch size")
     parser.add_argument("--overlap", type=float, default=0.05,
-                        help="patch overlap比例")
+                        help="Patch overlap ratio")
     parser.add_argument("--grid_size", type=int, default=1,
-                        help="中心采样grid大小，与原Step1一致")
+                        help="Center-sampling grid size; matches the original Step 1")
     parser.add_argument("--read_workers", type=int, default=4,
-                        help="OpenSlide读取线程数，每个线程独立打开OpenSlide对象")
+                        help="Number of OpenSlide reader threads; each thread opens its own slide object")
 
-    # ── YOLO 推理参数 ─────────────────────────────────────────
+    # YOLO inference parameters
     parser.add_argument("--infer_conf", type=float, default=0.1,
-                        help="YOLO推理置信度阈值（低阈值保留更多候选）")
+                        help="YOLO confidence threshold (lower values retain more candidates)")
     parser.add_argument("--infer_iou", type=float, default=0.3,
-                        help="YOLO NMS IoU阈值")
+                        help="YOLO NMS IoU threshold")
     parser.add_argument("--conf", type=float, default=0.5,
-                        help="保存/裁剪/JSON(conf版)/可视化(conf版) 的置信度阈值")
+                        help="Confidence threshold for saving crops, confidence JSON, and confidence visualizations")
     parser.add_argument("--yolo_batch_size", type=int, default=8,
                         help="YOLO batch size")
     parser.add_argument("--imgsz", type=int, default=1024,
-                        help="YOLO推理输入尺寸，默认与patch size一致")
+                        help="YOLO inference image size; defaults to the patch size")
     parser.add_argument("--half", action="store_true",
-                        help="启用FP16推理，默认关闭以保持结果一致性")
+                        help="Enable FP16 inference; disabled by default for output consistency")
 
-    # ── 胸腹水完整性过滤参数 ──────────────────────────────────
+    # Effusion-specific cell-completeness filtering parameters
     parser.add_argument("--border_threshold", type=int, default=5,
-                        help="single_cell 贴边截断判断阈值（像素），贴边即过滤")
+                        help="Border threshold in pixels for truncated single_cell detections; border-touching cells are filtered")
     parser.add_argument("--small_cell_size", type=int, default=40,
-                        help="小尺寸single_cell判断阈值（像素），长和宽均小于此值则视为小细胞，不裁剪保存、不写入JSON，但仍统计")
+                        help="Small single_cell threshold in pixels; cells with both dimensions below this value are counted but not cropped or written to JSON")
     parser.add_argument("--crop_padding", type=int, default=5,
-                        help="裁剪保存时四周扩展padding（像素）")
+                        help="Padding in pixels added around saved crops")
 
-    # ── 输出控制 ──────────────────────────────────────────────
+    # Output controls
     parser.add_argument("--save_json", action="store_true", default=True,
-                        help="保存patch级JSON，默认保存")
+                        help="Save patch-level JSON files (default: enabled)")
     parser.add_argument("--no_save_json", dest="save_json", action="store_false",
-                        help="不保存patch级JSON，仅保存crop和统计")
-    # 胸腹水原版 annotation 默认关闭（原代码中注释掉了）
+                        help="Do not save patch-level JSON files; save crops and statistics only")
+    # Disable annotation images by default to match the effusion workflow
     parser.add_argument("--save_annotation", action="store_true", default=False,
-                        help="保存annotation可视化图，默认关闭（与原胸腹水step2一致）")
+                        help="Save annotation visualizations (default: disabled to match the effusion workflow)")
 
-    # ── 背景过滤（可选，默认关闭）────────────────────────────
+    # Optional background filtering: disabled by default to avoid missed detections
     parser.add_argument("--skip_background", action="store_true",
-                        help="跳过明显背景patch，默认关闭避免漏检")
+                        help="Skip obvious background patches; disabled by default to avoid missed detections")
     parser.add_argument("--bg_sat_thr", type=int, default=15,
-                        help="背景过滤HSV饱和度阈值")
+                        help="HSV saturation threshold for background filtering")
     parser.add_argument("--bg_val_thr", type=int, default=230,
-                        help="背景过滤HSV亮度阈值")
+                        help="HSV brightness threshold for background filtering")
     parser.add_argument("--bg_ratio_thr", type=float, default=0.95,
-                        help="背景像素比例超过该值则跳过patch")
+                        help="Skip a patch when its background-pixel ratio exceeds this threshold")
 
     return parser.parse_args()
 
 
-# ============================================================
-# 与原 Step1 一致的中心 patch 坐标生成
-# ============================================================
+# Generate center-patch coordinates consistent with the original Step 1
 def generate_center_patch_coords(width, height, patch_size=1024, overlap_rate=0.05, grid_size=3):
     overlap_pixels = int(patch_size * overlap_rate)
     step_size = patch_size - overlap_pixels
@@ -152,9 +130,7 @@ def generate_center_patch_coords(width, height, patch_size=1024, overlap_rate=0.
     return coords, num_rows, num_cols, grid_rows, grid_cols
 
 
-# ============================================================
-# 可选背景过滤：默认不启用
-# ============================================================
+# Optional background filtering: disabled by default
 def is_background_patch_bgr(img_bgr, sat_thr=15, val_thr=230, ratio_thr=0.95):
     hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
     s = hsv[:, :, 1]
@@ -165,20 +141,20 @@ def is_background_patch_bgr(img_bgr, sat_thr=15, val_thr=230, ratio_thr=0.95):
 _thread_local = threading.local()
 
 def get_slide(slide_path):
-    """每个线程只打开一次 OpenSlide，线程内复用"""
+    """Each worker thread opens OpenSlide once and reuses it."""
     if not hasattr(_thread_local, "slide") or _thread_local.slide_path != slide_path:
         if hasattr(_thread_local, "slide"):
             try:
                 _thread_local.slide.close()
             except Exception:
-                pass                        # close 失败不阻止重新 open
+                pass   # Ignore close failures and continue reopening the slide
         _thread_local.slide = openslide.OpenSlide(slide_path)
         _thread_local.slide_path = slide_path
     return _thread_local.slide
 
 def read_patch_worker(slide_path, coord_item, patch_size):
     x, y, row, col = coord_item
-    slide = get_slide(slide_path)           # ← 线程内复用，不重复 open/close
+    slide = get_slide(slide_path)   # Reuse one OpenSlide object within each worker thread
     region = slide.read_region((x, y), level=0, size=(patch_size, patch_size))
     region_rgb = region.convert("RGB")
     region_np = np.ascontiguousarray(np.asarray(region_rgb, dtype=np.uint8))
@@ -194,10 +170,8 @@ def read_patch_worker(slide_path, coord_item, patch_size):
         "y": y,
     }
 
-# ============================================================
-# 胸腹水：single_cell 完整性检查（贴边即过滤）
-# 其他类别不做贴边过滤，与原 step2 保持一致
-# ============================================================
+# Effusion single-cell completeness filtering (legacy Step 2 logic)
+# Preserve the original Step 2 filtering behavior
 def is_complete_single_cell(xyxy, image_shape, border_threshold=5):
     x1, y1, x2, y2 = map(int, xyxy)
     img_h, img_w = image_shape[:2]
@@ -210,9 +184,7 @@ def is_complete_single_cell(xyxy, image_shape, border_threshold=5):
     return True
 
 
-# ============================================================
-# 胸腹水：过滤不完整 single_cell（其他类别全部保留）
-# ============================================================
+# Filter incomplete single cells using the effusion workflow rules
 def filter_incomplete_detections(detections, class_names, image_shape, border_threshold=5):
     if len(detections) == 0:
         return detections, 0
@@ -236,23 +208,19 @@ def filter_incomplete_detections(detections, class_names, image_shape, border_th
 
     return filtered_detections, skipped_count
 
-# ============================================================
-# 小细胞判断：长和宽均小于阈值才视为小细胞（and 条件）
-# 统一在此函数中定义，避免多处散落导致不一致
-# ============================================================
+# Small-cell rule: both dimensions below the threshold are treated as small cells
+# Keep this rule centralized to ensure consistent behavior
 def is_small_single_cell(class_name: str, w: float, h: float, small_cell_size: int) -> bool:
-    """
-    判断是否为小尺寸 single_cell。
-    条件：类别包含 single_cell，且宽和高均小于 small_cell_size（and）。
-    统一使用 float 类型比较，避免 int 截断导致边界值不一致。
+    """Return whether a detection is a small single cell.
+
+    Both dimensions must be below ``small_cell_size``.
+    Floating-point comparison avoids integer-truncation boundary errors.
     """
     if "single_cell" not in class_name.lower():
         return False
     return (w < small_cell_size) and (h < small_cell_size)
 
-# ============================================================
-# JSON 模板：保持原胸腹水 step2 格式
-# ============================================================
+# JSON template compatible with the original effusion Step 2 format
 def make_json_template(image_name, image_ext, image_shape, model_path, description=""):
     return {
         "version":     "3.0.3",
@@ -266,9 +234,7 @@ def make_json_template(image_name, image_ext, image_shape, model_path, descripti
     }
 
 
-# ============================================================
-# 单 patch 结果处理与保存：保留原胸腹水 step2 输出结构
-# ============================================================
+# Process and save results for one patch using the original Step 2 layout
 def process_and_save_one_patch(
     image,
     image_name,
@@ -301,7 +267,7 @@ def process_and_save_one_patch(
 
     detections = sv.Detections.from_ultralytics(result)
 
-    # ── 初始化统计记录（与原胸腹水 step2 字段一致）──────────
+    # Initialize the statistics record with Step 2-compatible fields
     stats_record = {
         "image_name":                     image_name,
         "total_detections":               0,
@@ -314,7 +280,7 @@ def process_and_save_one_patch(
         stats_record[f"total_{cn}"] = 0
         stats_record[f"{cn}_conf"]  = 0
 
-    # ── 无检测结果 ────────────────────────────────────────────
+    # Handle patches with no detections
     if len(detections) == 0:
         if save_json:
             desc_all  = f"Detected by YOLOv12 model (all detections, incomplete single_cell removed): {model_path}"
@@ -330,34 +296,34 @@ def process_and_save_one_patch(
 
         return stats_record
 
-    # ── 过滤不完整 single_cell ────────────────────────────────
+    # Filter detections: incomplete single cells are removed
     detections, skipped_count = filter_incomplete_detections(
         detections, class_names, image_shape, border_threshold
     )
 
-    # ── conf 筛选（仅用于 annotation 可视化）─────────────────
+    # Apply the confidence threshold and optionally create annotations
     detections_conf = detections[detections.confidence >= conf]
 
-    # ── 初始化统计计数器 ──────────────────────────────────────
+    # Initialize statistics counters
     class_counts      = defaultdict(int)
     class_counts_conf = defaultdict(int)
     small_sc_count    = 0
     small_sc_conf     = 0
 
-    # ── 初始化 JSON 模板 ──────────────────────────────────────
+    # Initialize JSON templates
     desc_all  = f"Detected by YOLOv12 model (all detections, incomplete single_cell removed): {model_path}"
     desc_conf = f"Detected by YOLOv12 model (conf>={conf}, incomplete single_cell removed): {model_path}"
     json_data_all  = make_json_template(image_name, image_ext, image_shape, model_path, desc_all)
     json_data_conf = make_json_template(image_name, image_ext, image_shape, model_path, desc_conf)
 
-    # ── 连续编号计数器 ────────────────────────────────────────
-    # json_all_i  : _all.json  中 shape 的连续编号（非小细胞，所有 conf）
-    # crop_conf_i : _conf.json 中 shape 的连续编号，与裁剪文件名完全对齐
-    #               （非小细胞 且 confidence >= conf，两者过滤条件完全相同）
+    # Continuous detection counters
+    # json_all_i: shape index in _all.json, including small cells at every confidence level
+    # crop_conf_i: shape index in _conf.json and saved crop filenames
+    # Small cells with confidence above the threshold are filtered consistently
     json_all_i  = 0
     crop_conf_i = 0
 
-    # ── 统计 + JSON 构建 + 裁剪保存（单次遍历）───────────────
+    # Single pass: update statistics, JSON, and saved crops
     for xyxy, class_id, confidence in zip(
         detections.xyxy, detections.class_id, detections.confidence
     ):
@@ -368,7 +334,7 @@ def process_and_save_one_patch(
         class_name = class_names[class_id]
         is_small   = is_small_single_cell(class_name, w, h, small_cell_size)
 
-        # ── 统计（小细胞也统计）──────────────────────────────
+        # Track small cells in the statistics
         class_counts[class_name] += 1
         if is_small:
             small_sc_count += 1
@@ -377,11 +343,11 @@ def process_and_save_one_patch(
             if is_small:
                 small_sc_conf += 1
 
-        # ── 小细胞：只统计，不写 JSON，不裁剪保存 ────────────
+        # Small cells are recorded in statistics only and are not saved as JSON or crops
         if is_small:
             continue
 
-        # ── padding 坐标计算一次，JSON 和裁剪保存共用 ─────────
+        # Compute padded coordinates once for both JSON and crop export
         x1_pad = max(0,              x1i - crop_padding)
         y1_pad = max(0,              y1i - crop_padding)
         x2_pad = min(image_shape[1], x2i + crop_padding)
@@ -404,7 +370,7 @@ def process_and_save_one_patch(
             "flags":       {},
         }
 
-        # ── 写入 _all.json ────────────────────────────────────
+        # Write _all.json
         shape_all = {
             **shape_base,
             "attributes": {
@@ -416,11 +382,11 @@ def process_and_save_one_patch(
         json_data_all["shapes"].append(shape_all)
         json_all_i += 1
 
-        # ── conf 不足：只写 _all.json，不写 _conf.json，不裁剪
+        # Confidence filtering: write only _all.json below the threshold
         if confidence < conf:
             continue
 
-        # ── 写入 _conf.json ───────────────────────────────────
+        # Write _conf.json
         shape_conf = {
             **shape_base,
             "attributes": {
@@ -431,7 +397,7 @@ def process_and_save_one_patch(
         }
         json_data_conf["shapes"].append(shape_conf)
 
-        # ── 裁剪保存（只保存 single_cell 和 cluster 两类）─────
+        # Save crops for single_cell and cluster detections only
         SAVE_CROP_CLASSES = {"single_cell", "cluster"}
         if class_name in SAVE_CROP_CLASSES:
             cropped = image[y1_pad:y2_pad, x1_pad:x2_pad]
@@ -444,23 +410,23 @@ def process_and_save_one_patch(
             )
         crop_conf_i += 1
 
-    # ── 保存 JSON ─────────────────────────────────────────────
+    # Save JSON files
     if save_json:
         with open(os.path.join(sample_json_dir, f"{image_name}_all.json"), "w", encoding="utf-8") as f:
             json.dump(json_data_all, f, indent=2, ensure_ascii=False)
         with open(os.path.join(sample_json_dir, f"{image_name}_conf{conf}.json"), "w", encoding="utf-8") as f:
             json.dump(json_data_conf, f, indent=2, ensure_ascii=False)
 
-    # ── 保存 annotation（默认关闭）───────────────────────────
+    # Save annotation images when enabled
     if save_annotation:
-        # 全量可视化
+        # Visualize all detections
         ann_all    = image.copy()
         labels_all = [f"{class_names[c]} {cf:.2f}" for c, cf in zip(detections.class_id, detections.confidence)]
         ann_all    = box_annotator.annotate(scene=ann_all, detections=detections)
         ann_all    = label_annotator.annotate(scene=ann_all, detections=detections, labels=labels_all)
         cv2.imwrite(os.path.join(sample_annotation_dir, f"{image_name}_all_annotated.png"), ann_all)
 
-        # conf 可视化
+        # Visualize detections above the confidence threshold
         if len(detections_conf) > 0:
             ann_conf    = image.copy()
             labels_conf = [f"{class_names[c]} {cf:.2f}" for c, cf in zip(detections_conf.class_id, detections_conf.confidence)]
@@ -470,7 +436,7 @@ def process_and_save_one_patch(
             ann_conf = image.copy()
         cv2.imwrite(os.path.join(sample_annotation_dir, f"{image_name}_conf{conf}_annotated.png"), ann_conf)
 
-    # ── 更新统计记录 ──────────────────────────────────────────
+    # Update the statistics record
     stats_record.update({
         "total_detections":               len(detections),
         "detections_conf":                len(detections_conf),
@@ -486,9 +452,7 @@ def process_and_save_one_patch(
 
 
 
-# ============================================================
-# 主流程
-# ============================================================
+# Main workflow
 def main():
     args = parse_args()
 
@@ -498,10 +462,10 @@ def main():
     os.makedirs(sample_output_dir, exist_ok=True)
 
     print("============================================================")
-    print("  Step1+Step2 合并流式推理启动（胸腹水）")
-    print(f"  SVS文件        : {svs_path}")
-    print(f"  样本名         : {sample_name}")
-    print(f"  输出目录       : {sample_output_dir}")
+    print("  Combined Step 1 + Step 2 streaming inference started (effusion)")
+    print(f"  SVS file         : {svs_path}")
+    print(f"  Sample name      : {sample_name}")
+    print(f"  Output directory : {sample_output_dir}")
     print(f"  patch size     : {args.size}")
     print(f"  overlap        : {args.overlap}")
     print(f"  grid_size      : {args.grid_size}")
@@ -519,7 +483,7 @@ def main():
 
     total_start = time.time()
 
-    # ── 读取 slide 尺寸（只打开一次取 metadata）──────────────
+    # Read slide dimensions once for metadata
     slide = openslide.OpenSlide(svs_path)
     width, height = slide.dimensions
     slide.close()
@@ -533,7 +497,7 @@ def main():
     print(f"Original grid    : {num_rows} x {num_cols} = {num_rows * num_cols} patches")
     print(f"Center patches   : {grid_rows} x {grid_cols} = {len(coords)} patches")
 
-    # ── 加载 YOLO ─────────────────────────────────────────────
+    # Load the YOLO model
     model           = YOLO(args.model_path)
     class_names     = model.names
     box_annotator   = sv.BoxAnnotator()
@@ -543,7 +507,7 @@ def main():
     skipped_bg         = 0
     batch_items        = []
 
-    # ── flush_batch：将当前 batch 送入 YOLO 推理并处理结果 ───
+    # Run YOLO inference for the current batch
     def flush_batch(items):
 
         if not items:
@@ -578,20 +542,20 @@ def main():
             )
             stats_records.append(rec)
 
-    # ── 多线程读取 patch + 主线程 batch 推理 ─────────────────
+    # Read patches in worker threads and run batched YOLO inference on the main thread
     with ThreadPoolExecutor(max_workers=args.read_workers) as executor:
-        # 按顺序提交，保留 future 列表（有序）
+        # Submit futures in coordinate order
         futures = [
             executor.submit(read_patch_worker, svs_path, coord, args.size)
             for coord in coords
         ]
 
-        # ✅ 按提交顺序迭代，而不是 as_completed
-        for future in tqdm(futures, total=len(futures), desc="OpenSlide读取+YOLO推理"):
+        # Consume futures in submission order to preserve deterministic output ordering
+        for future in tqdm(futures, total=len(futures), desc="OpenSlide reading + YOLO inference"):
             try:
-                item = future.result()   # 会等待该 future 完成
+                item = future.result()   # Read and process each patch
             except Exception as e:
-                print(f"  ⚠️ 读取patch失败: {e}")
+                print(f"  Warning: failed to read patch: {e}")
                 continue
 
             if args.skip_background and is_background_patch_bgr(
@@ -607,10 +571,10 @@ def main():
                 flush_batch(batch_items)
                 batch_items = []
 
-    # ── flush 剩余 batch ──────────────────────────────────────
+    # Save patch-level detection statistics
     flush_batch(batch_items)
 
-    # ── 保存 patch 级统计（字段与原胸腹水 step2 一致）────────
+    # Save sample-level confidence statistics
     if stats_records:
         stats_df   = pd.DataFrame(stats_records)
         stats_df   = stats_df.sort_values("image_name").reset_index(drop=True)
@@ -624,26 +588,26 @@ def main():
         total_small    = stats_df["small_single_cell"].sum()
         total_small_c  = stats_df["small_single_cell_conf"].sum()
 
-        print("\n检测统计信息:")
-        print(f"- 处理patch数                              : {total_images}")
-        print(f"- 跳过背景patch数                          : {skipped_bg}")
-        print(f"- 总检测数                                 : {total_det}")
-        print(f"- conf >= {args.conf} 的检测数              : {total_det_conf}"
+        print("\nDetection statistics:")
+        print(f"- Processed patches                         : {total_images}")
+        print(f"- Skipped background patches                : {skipped_bg}")
+        print(f"- Total detections                          : {total_det}")
+        print(f"- Detections with conf >= {args.conf}             : {total_det_conf}",
               + (f" ({total_det_conf/total_det*100:.1f}%)" if total_det > 0 else ""))
-        print(f"- 删除的不完整 single_cell 数              : {total_skipped}")
-        print(f"- 小尺寸 single_cell 数量                  : {total_small}")
-        print(f"- conf >= {args.conf} 的小尺寸 single_cell : {total_small_c}")
-        print("\n各类别统计:")
+        print(f"- Removed incomplete single_cell detections : {total_skipped}")
+        print(f"- Small single_cell detections              : {total_small}")
+        print(f"- Small single_cell with conf >= {args.conf}      : {total_small_c}")
+        print("\nStatistics by class:")
         for cn in sorted(class_names.values()):
             t = stats_df[f"total_{cn}"].sum()
             c = stats_df[f"{cn}_conf"].sum()
-            print(f"  - {cn}: 总数 {t}，conf >= {args.conf} 的数量 {c}")
-        print(f"\n- patch级统计保存到: {stats_path}")
+            print(f"  - {cn}: total {t}; conf >= {args.conf}: {c}")
+        print(f"\n- Patch-level statistics saved to: {stats_path}")
 
     elapsed = time.time() - total_start
-    print("\n处理完成!")
-    print(f"结果已保存到: {sample_output_dir}")
-    print(f"总耗时: {elapsed:.2f} 秒")
+    print("\nProcessing complete!")
+    print(f"Results saved to: {sample_output_dir}")
+    print(f"Total elapsed time: {elapsed:.2f} s")
 
 
 if __name__ == "__main__":

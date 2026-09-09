@@ -1,4 +1,4 @@
-"""模型模块"""
+"""Model-definition utilities."""
 
 from .model_definitions import create_model, SUPPORTED_MODELS
 

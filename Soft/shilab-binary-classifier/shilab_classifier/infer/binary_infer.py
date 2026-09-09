@@ -1,10 +1,5 @@
 #!/usr/bin/env python
-"""
-使用训练好的DenseNet161模型对新数据进行推理并为恶性预测添加置信度标记
-- 预测判断：torch.max（等价于固定阈值0.5），二分类标准做法
-- 文件名置信度：保留4位小数原始数值
-- CONFIDENCE_THRESHOLD：只用于筛选哪些恶性图片值得复制
-"""
+"""Inference utilities."""
 
 import os
 import torch
@@ -21,11 +16,8 @@ from shilab_classifier.models.model_definitions import create_model
 from shilab_classifier.training.preprocessing import pad_to_square_transform, pad_to_square_299_transform
 
 
-# ============================================================
-# 数据加载类
-# ============================================================
 class UnlabeledImageDataset(Dataset):
-    """处理单文件夹结构的无标签图像数据集"""
+    """Unlabeled image dataset."""
 
     def __init__(self, folder_path, transform=None):
         self.folder_path = folder_path
@@ -48,56 +40,43 @@ class UnlabeledImageDataset(Dataset):
         return image, 0
 
 
-# ============================================================
-# 模型权重加载（兼容多种保存格式）
-# ============================================================
 def load_model_weights(model, model_path, device):
+    """Load model weights from a checkpoint file."""
     checkpoint = torch.load(model_path, map_location=device)
     if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
         model.load_state_dict(checkpoint['model_state_dict'])
-        print("已加载 checkpoint['model_state_dict']")
+        print("Loaded checkpoint['model_state_dict']")
     elif isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
         model.load_state_dict(checkpoint['state_dict'])
-        print("已加载 checkpoint['state_dict']")
+        print("Loaded checkpoint['state_dict']")
     else:
         model.load_state_dict(checkpoint)
-        print("已加载直接保存的 state_dict")
+        print("Loaded state_dict directly")
     return model
 
 
-# ============================================================
-# 处理恶性预测图片
-# ============================================================
 def process_malignant_predictions(results_df, malignant_output_dir, confidence_threshold, output_dir):
-    """
-    复制恶性预测图片到输出目录，文件名附带4位小数置信度
-    筛选条件：predicted_class == 'malignant' 且 prob_malignant >= confidence_threshold
-    """
+    """Save and summarize malignant predictions."""
     malignant_predictions = results_df[
         (results_df['predicted_class'] == 'malignant') &
         (results_df['prob_malignant'] >= confidence_threshold)
     ]
 
-    print(f"找到 {len(malignant_predictions)} 张恶性预测图片（置信度 ≥ {confidence_threshold}）")
+    print(f"Found {len(malignant_predictions)} malignant prediction(s) "
+          f"with confidence >= {confidence_threshold}")
 
     if len(malignant_predictions) == 0:
-        print("没有找到符合条件的恶性预测图片")
+        print("No malignant predictions meet the confidence threshold")
         return
 
     processed_count    = 0
     renamed_files_info = []
 
     for _, row in malignant_predictions.iterrows():
-        original_path = row['image_path']
-        confidence    = row['prob_malignant']
-
-        name, ext = os.path.splitext(os.path.basename(original_path))
-
-        # ✅ 保留4位小数原始数值，格式统一且可读
-        # 示例：0.9521 → "cell_001_malignant_0.9521.jpg"
-        #       1.0000 → "cell_002_malignant_1.0000.jpg"
-        confidence_str = f"{confidence:.4f}"
-        new_filename   = f"{name}_malignant_{confidence_str}{ext}"
+        original_path  = row['image_path']
+        confidence     = row['prob_malignant']
+        name, ext      = os.path.splitext(os.path.basename(original_path))
+        new_filename   = f"{name}_malignant_{confidence:.4f}{ext}"
         new_path       = os.path.join(malignant_output_dir, new_filename)
 
         try:
@@ -109,19 +88,16 @@ def process_malignant_predictions(results_df, malignant_output_dir, confidence_t
                 'confidence'   : confidence,
             })
         except Exception as e:
-            print(f"  ⚠️  处理文件 {original_path} 时出错: {e}")
+            print(f"  ⚠️  Error processing {original_path}: {e}")
 
     if renamed_files_info:
         renamed_df   = pd.DataFrame(renamed_files_info)
         renamed_path = os.path.join(output_dir, 'malignant_images_with_confidence.csv')
         renamed_df.to_csv(renamed_path, index=False, encoding='utf-8-sig')
-        print(f"已处理 {processed_count} 张恶性图片，详情保存到 {renamed_path}")
-        print(f"带置信度的恶性图片已保存到 {malignant_output_dir}")
+        print(f"Processed {processed_count} malignant image(s); details saved to {renamed_path}")
+        print(f"Malignant images with confidence scores saved to {malignant_output_dir}")
 
 
-# ============================================================
-# 主函数
-# ============================================================
 def predict_new_data(
     model_name="DenseNet161",
     model_path=None,
@@ -134,72 +110,53 @@ def predict_new_data(
     mean=None,
     std=None
 ):
-    """对新收集的数据进行预测并为恶性预测添加置信度标记"""
-    
-    # 参数检查
+    """Run binary classification on unlabelled images."""
     if model_path is None or input_dir is None or output_dir is None:
-        raise ValueError("必须提供模型路径、输入目录和输出目录")
-    
+        raise ValueError("model_path, input_dir, and output_dir are all required")
+
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    num_classes = 2
+
+    num_classes  = 2
     idx_to_class = {0: "benign", 1: "malignant"}
-    
-    # 标准化参数（如果未提供，则使用ImageNet默认值）
+
     if mean is None:
-        mean = [0.485, 0.456, 0.406]  # ImageNet默认值
-    
+        mean = [0.485, 0.456, 0.406]
     if std is None:
-        std = [0.229, 0.224, 0.225]  # ImageNet默认值
-    
-    # 创建输出目录
+        std  = [0.229, 0.224, 0.225]
+
     malignant_output_dir = os.path.join(output_dir, 'malignant_images')
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(output_dir,          exist_ok=True)
     os.makedirs(malignant_output_dir, exist_ok=True)
 
     print(f"\n{'='*60}")
-    print(f"使用 {model_name} 模型预测新数据")
+    print(f"Predicting with model: {model_name}")
     print(f"{'='*60}")
-    print(f"模型路径: {model_path}")
-    print(f"输入目录: {input_dir}")
-    print(f"输出目录: {output_dir}")
-    print(f"设备: {device}")
-    print(f"批次大小: {batch_size}")
-    print(f"置信度阈值: {confidence_threshold}")
+    print(f"  Model path:          {model_path}")
+    print(f"  Input directory:     {input_dir}")
+    print(f"  Output directory:    {output_dir}")
+    print(f"  Device:              {device}")
+    print(f"  Batch size:          {batch_size}")
+    print(f"  Confidence threshold:{confidence_threshold}")
 
-    # ----------------------------------------------------------
-    # 1. 加载模型
-    # ----------------------------------------------------------
-    print(f"加载模型权重: {model_path}")
+    print(f"Loading model weights: {model_path}")
     model = create_model(model_name, num_classes=num_classes)
     model = load_model_weights(model, model_path, device)
     model = model.to(device)
     model.eval()
 
-    # ----------------------------------------------------------
-    # 2. 数据预处理（必须和训练时完全一致）
-    # ----------------------------------------------------------
-    print(f"使用标准化参数 - 均值: {mean}, 标准差: {std}")
-    
-    # 选择合适的填充变换
-    if 'Inception' in model_name:
-        pad_transform = pad_to_square_299_transform
-    else:
-        pad_transform = pad_to_square_transform
-        
+    print(f"Normalisation  mean={mean}  std={std}")
+    pad_transform = (
+        pad_to_square_299_transform if 'Inception' in model_name
+        else pad_to_square_transform
+    )
     transform = transforms.Compose([
         transforms.Lambda(pad_transform),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std)
     ])
 
-    # ----------------------------------------------------------
-    # 3. 加载数据
-    # ----------------------------------------------------------
-    print(f"加载新数据: {input_dir}")
-
-    # 过滤隐藏文件夹（如 .ipynb_checkpoints）再判断目录结构
+    print(f"Loading data from: {input_dir}")
     has_subfolders = any(
         os.path.isdir(os.path.join(input_dir, d))
         for d in os.listdir(input_dir)
@@ -207,33 +164,30 @@ def predict_new_data(
     )
 
     if has_subfolders:
-        print("检测到子文件夹结构，使用ImageFolder加载数据...")
-        print("⚠️  注意：请确认下方打印的类别映射和训练时一致！")
+        print("Subfolder structure detected; using ImageFolder.")
+        print("⚠️  Verify that the class mapping below matches training.")
         try:
             dataset    = datasets.ImageFolder(input_dir, transform=transform)
             dataloader = DataLoader(dataset, batch_size=batch_size,
                                     shuffle=False, num_workers=num_workers)
-            print(f"找到 {len(dataset)} 张图片，分为 {len(dataset.class_to_idx)} 个类别")
+            print(f"Found {len(dataset)} image(s) across {len(dataset.class_to_idx)} class(es):")
             for class_name, idx in dataset.class_to_idx.items():
-                print(f"  - 文件夹类别 {idx}: {class_name}")
+                print(f"  - folder class {idx}: {class_name}")
         except Exception as e:
-            print(f"加载数据时出错: {e}")
+            print(f"Error loading data: {e}")
             return None
     else:
-        print("检测到单一文件夹结构，使用自定义数据集加载...")
+        print("Flat folder structure detected; using UnlabeledImageDataset.")
         dataset    = UnlabeledImageDataset(input_dir, transform=transform)
         dataloader = DataLoader(dataset, batch_size=batch_size,
                                 shuffle=False, num_workers=num_workers)
-        print(f"找到 {len(dataset)} 张图片")
+        print(f"Found {len(dataset)} image(s)")
 
     if len(dataset) == 0:
-        print("错误：没有找到任何图片，请检查路径和文件格式。")
+        print("Error: no images found. Check the path and file formats.")
         return None
 
-    # ----------------------------------------------------------
-    # 4. 推理
-    # ----------------------------------------------------------
-    print("\n开始预测...")
+    print("\nRunning inference...")
     all_paths  = []
     all_logits = []
     all_probs  = []
@@ -242,9 +196,8 @@ def predict_new_data(
     with torch.no_grad():
         for batch_idx, (inputs, _) in enumerate(dataloader):
             if batch_idx % 10 == 0:
-                print(f"  预测批次 {batch_idx + 1}/{len(dataloader)}")
+                print(f"  Batch {batch_idx + 1}/{len(dataloader)}")
 
-            # 获取当前批次图像路径
             batch_size_actual = inputs.size(0)
             start_idx   = batch_idx * batch_size
             batch_paths = [
@@ -255,7 +208,6 @@ def predict_new_data(
             inputs  = inputs.to(device)
             outputs = model(inputs)
 
-            # 兼容 Inception 等多输出模型
             if isinstance(outputs, tuple):
                 outputs = outputs[0]
 
@@ -267,9 +219,6 @@ def predict_new_data(
             all_probs.append(probs.cpu().numpy())
             all_preds.append(predicted.cpu().numpy())
 
-    # ----------------------------------------------------------
-    # 5. 整理结果
-    # ----------------------------------------------------------
     all_logits = np.concatenate(all_logits, axis=0)
     all_probs  = np.concatenate(all_probs,  axis=0)
     all_preds  = np.concatenate(all_preds,  axis=0)
@@ -287,23 +236,16 @@ def predict_new_data(
 
     results_path = os.path.join(output_dir, 'prediction_results.csv')
     results_df.to_csv(results_path, index=False, encoding='utf-8-sig')
-    print(f"\n预测结果已保存到 {results_path}")
+    print(f"\nPrediction results saved to {results_path}")
 
-    # 统计
     class_counts = results_df['predicted_class'].value_counts()
-    print("\n预测类别统计:")
+    print("\nPrediction summary:")
     for class_name, count in class_counts.items():
-        print(f"  - {class_name}: {count} 张 ({count / len(results_df) * 100:.1f}%)")
+        print(f"  - {class_name}: {count} ({count / len(results_df) * 100:.1f}%)")
 
-    # ----------------------------------------------------------
-    # 6. 处理恶性图片
-    # ----------------------------------------------------------
-    print("\n开始处理恶性预测图片...")
+    print("\nProcessing malignant predictions...")
     process_malignant_predictions(results_df, malignant_output_dir, confidence_threshold, output_dir)
 
-    # ----------------------------------------------------------
-    # 7. 绘制概率分布图
-    # ----------------------------------------------------------
     plt.figure(figsize=(10, 6))
     plt.hist(results_df['prob_malignant'], bins=20, alpha=0.7,
              color='steelblue', edgecolor='white')
@@ -319,53 +261,42 @@ def predict_new_data(
     prob_hist_path = os.path.join(output_dir, 'malignant_probability_distribution.png')
     plt.savefig(prob_hist_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"预测概率分布图已保存到 {prob_hist_path}")
+    print(f"Probability distribution plot saved to {prob_hist_path}")
 
-    print("\n✅ 预测完成！")
+    print("\n✅ Inference complete.")
     return results_df
 
 
-# ============================================================
-# 命令行参数解析
-# ============================================================
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description='使用训练好的模型对新数据进行推理')
-    
-    parser.add_argument('-m', '--model', type=str, default="DenseNet161",
-                        help='模型名称 (默认: DenseNet161)')
-    
-    parser.add_argument('-w', '--weights', type=str, required=True,
-                        help='模型权重文件路径 (.pth)')
-    
-    parser.add_argument('-i', '--input', type=str, required=True,
-                        help='输入数据目录路径')
-    
-    parser.add_argument('-o', '--output', type=str, required=True,
-                        help='输出结果目录路径')
-    
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Run inference on new data using a trained model'
+    )
+    parser.add_argument('-m', '--model',      type=str, default="DenseNet161",
+                        help='Model name (default: DenseNet161)')
+    parser.add_argument('-w', '--weights',    type=str, required=True,
+                        help='Path to model weights file (.pth)')
+    parser.add_argument('-i', '--input',      type=str, required=True,
+                        help='Input data directory')
+    parser.add_argument('-o', '--output',     type=str, required=True,
+                        help='Output results directory')
     parser.add_argument('-b', '--batch-size', type=int, default=16,
-                        help='批处理大小 (默认: 16)')
-    
-    parser.add_argument('-j', '--workers', type=int, default=0,
-                        help='数据加载线程数 (默认: 0)')
-    
-    parser.add_argument('-t', '--threshold', type=float, default=0.5,
-                        help='恶性预测置信度阈值 (默认: 0.5)')
-    
+                        help='Batch size (default: 16)')
+    parser.add_argument('-j', '--workers',    type=int, default=0,
+                        help='Number of data-loader workers (default: 0)')
+    parser.add_argument('-t', '--threshold',  type=float, default=0.5,
+                        help='Malignant confidence threshold (default: 0.5)')
     parser.add_argument('--mean', type=float, nargs=3, default=None,
-                        help='标准化均值 [R G B] (默认: ImageNet均值 [0.485, 0.456, 0.406])')
-    
-    parser.add_argument('--std', type=float, nargs=3, default=None,
-                        help='标准化标准差 [R G B] (默认: ImageNet标准差 [0.229, 0.224, 0.225])')
-    
+                        help='Normalisation mean [R G B] (default: ImageNet [0.485, 0.456, 0.406])')
+    parser.add_argument('--std',  type=float, nargs=3, default=None,
+                        help='Normalisation std  [R G B] (default: ImageNet [0.229, 0.224, 0.225])')
     return parser.parse_args(argv)
 
+
 def main(argv=None):
-    """binary_infer 的命令行入口。成功返回 0，失败时向调用方抛出异常。"""
+    """Run the command-line application."""
     args = parse_args(argv)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
     predict_new_data(
         model_name=args.model,
         model_path=args.weights,

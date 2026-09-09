@@ -1,109 +1,49 @@
 # ShiLab Binary Classifier
 
-ShiLab课题组的二分类模型工具包
+`shilab-binary-classifier` provides reproducible utilities for binary classification of cytology cell images. It supports dataset splitting, cross-validation preparation, model training and evaluation, and inference on unlabelled images.
 
-## 功能特性
-
-- ✅ 数据集分割（训练集、验证集、测试集）
-- 🚧 模型训练（开发中）
-- 🚧 模型评估（开发中）
-- 🚧 模型推理（开发中）
-
-## 安装
-
-### 从源码安装
+## Installation
 
 ```bash
-git clone https://github.com/shilab/binary-classifier.git
-cd shilab-binary-classifier
+cd path/to/shilab-binary-classifier
 pip install -e .
 ```
 
-### 使用pip安装（发布后）
+Install the package's declared runtime requirements with `pip install -r requirements.txt` when editable installation is not used. Use a PyTorch build compatible with your CUDA driver when GPU inference or training is required.
 
-pip install shilab-binary-classifier
+## Data layout
 
-## 快速开始
+For splitting and training, arrange input images as follows:
 
-### 数据集分割
-
-```
-from shilab_classifier import split_dataset
-
-# 分割数据集
-result = split_dataset(
-    benign_path="path/to/benign/images",
-    malignant_path="path/to/malignant/images",
-    output_dir="path/to/output",
-    split_ratio=0.9,  # 90%用于训练验证集，10%用于测试集
-    random_seed=42
-)
-
-print(f"良性图像: {result['benign']}")
-print(f"恶性图像: {result['malignant']}")
-print(f"日志保存在: {result['log_path']}")
-
+```text
+raw_data/
+├── benign/
+└── malignant/
 ```
 
-## 输出结构
+Images may be PNG, JPG, JPEG, BMP, TIF, or TIFF files.
 
-output_dir/
-├── train_val/
-│   ├── benign/
-│   └── malignant/
-├── test/
-│   ├── benign/
-│   └── malignant/
-└── dataset_split_log.xlsx
+## Inference
 
+The installed command copies malignant predictions above the selected threshold and writes `prediction_results.csv` plus summary plots to the output directory.
 
-
-### 4. 评估模型
-
-```python
-import torch
-from shilab_classifier import evaluate_all_models
-
-# 评估所有训练好的模型
-result = evaluate_all_models(
-    model_list=None,  # None表示自动检测所有模型
-    cv_data_dir="path/to/cross_validation_data",
-    test_dir="path/to/test_data",
-    models_dir="path/to/trained_models",
-    output_dir="path/to/evaluation_results",
-    device='cuda' if torch.cuda.is_available() else 'cpu'
-)
-
-print(f"评估完成！总用时: {result['total_time']:.2f} 分钟")
-print(f"评估了 {result['num_models']} 个模型")
+```bash
+shilab-binary-infer \
+  --model DenseNet161 \
+  --weights /path/to/binary_model.pth \
+  --input /path/to/cell_images \
+  --output /path/to/binary_inference \
+  --mean 0.485 0.456 0.406 \
+  --std 0.229 0.224 0.225 \
+  --threshold 0.5
 ```
 
-## 评估输出
+`--mean` and `--std` must be the normalization values used for training. The input can be a flat image directory or an `ImageFolder`-style directory.
 
-```
-evaluation_results/
-├── ModelName1/
-│   ├── fold_1/
-│   │   ├── train_probabilities.csv
-│   │   ├── train_metrics.csv
-│   │   ├── train_confusion_matrix.png
-│   │   ├── val_probabilities.csv
-│   │   ├── val_metrics.csv
-│   │   ├── val_confusion_matrix.png
-│   │   ├── test_probabilities.csv
-│   │   ├── test_metrics.csv
-│   │   └── test_confusion_matrix.png
-│   ├── fold_2/
-│   │   └── ...
-│   ├── roc_curves/
-│   │   ├── roc_curve_fold_1.png
-│   │   └── ...
-│   ├── ModelName1_detailed_results.csv
-│   └── ModelName1_cross_validation_results.csv
-├── ModelName2/
-│   └── ...
-├── all_models_summary.csv
-├── all_models_heatmap.png
-├── top4_models_summary.csv
-└── top4_models_heatmap.png
-```
+## Training
+
+For the documented end-to-end training workflow, use the repository-level `train/` scripts and README. Model architectures available to the training API are exposed as `shilab_classifier.SUPPORTED_MODELS`.
+
+## Reproducibility
+
+Record the package version, model architecture, class order, random seed, image normalization, software environment, and the exact weight file used for each experiment. Do not commit patient images or model weights to source control unless their distribution has been approved.

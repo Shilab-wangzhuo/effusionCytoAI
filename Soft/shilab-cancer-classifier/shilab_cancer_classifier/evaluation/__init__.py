@@ -1,4 +1,4 @@
-"""评估模块"""
+"""Model-evaluation utilities."""
 
 from .evaluator import (
     evaluate_single_model,

@@ -1,77 +1,54 @@
-# Cross-domain Cluster Matching Pipeline
+# ShiLab Cross-Cluster Matching
 
-This project implements a cross-domain cluster matching pipeline for analyzing cell images.
+`shilab-cluster-algorithm` removes false-positive candidate cells by matching candidate-image clusters to malignant and benign reference clusters. It produces `matched_malignant_cells/`, the input consumed by the cancer-classifier inference workflow.
 
 ## Installation
 
-Install the package in development mode:
-
 ```bash
-cd  path/to/shilab-cluster-algorithm
+cd path/to/shilab-cluster-algorithm
 pip install -e .
 ```
 
-## Usage
+The editable install reads the complete runtime dependency list from
+`requirements.txt`. Install a PyTorch build compatible with the local CUDA
+driver before running the workflow on a GPU.
 
-After installation, you can run the analysis pipeline:
+## Primary interface
+
+Use the Python API from a project-specific Step-4 wrapper, which should provide reference paths, model weights, normalization statistics, the relevant malignant reference-cluster IDs, and matching rules:
 
 ```python
 from cross_cluster_matching.application.pipeline import run_pipeline
 
-# Run the pipeline
 run_pipeline(
-    positive_folder_path="path/to/positive/folders",
-    negative_folder_path="path/to/negative/folders", 
-    malignant_cells_dir="path/to/malignant/cells",
-    benign_cells_dir="path/to/benign/cells",
-    model_path="path/to/model",
-    base_save_dir="path/to/save/results",
-    feature_layer='penultimate',
-    reference_k=10,
-    max_candidate_k=20,
-    batch_size=16,
-    num_workers=0,
-    cell_size_weight=1.0,
-    model_type='ResNeXt',
-    pca_dim=32
+    positive_folder_path="/path/to/candidate_positive_folders",
+    negative_folder_path="/path/to/candidate_negative_folders",
+    reference_cache_dir="/path/to/reference_cache",
+    model_path="/path/to/feature_extractor.pth",
+    base_save_dir="/path/to/step4_results",
+    malignant_ref_clusters=[0],
+    matching_rules=[{
+        "target": 0,
+        "avoid": [1],
+        "threshold_target": 0.5,
+        "threshold_ratio": 3.0,
+        "threshold_avoid_others": None,
+    }],
 )
 ```
 
-## Features
+The command-line interface is available through:
 
-### Module Structure
-
-The package is organized into modular folders for easy maintenance and development:
-
-- **`cross_cluster_matching/`**: Main package directory containing all modules
-
-- **`clustering/`**: Clustering-related functions
-  - `calculate_consensus_score.py`: Functions for calculating matching cluster consensus scores
-  - `K_optimizer.py`: K-value optimization related functions
-  - `matching_rule_application.py`: Matching rule setting and application functions
-
-- **`data/`**: Image data processing functions
-  - `data_utils.py`: Image data processing related utilities
-
-- **`models/`**: Model construction and feature extraction
-  - `models.py`: Model class construction functions
-  - `feature_extractor.py`: Feature extraction related functions
-
-- **`visualization/`**: Visualization functions
-  - `visualization.py`: Visualization related functions
-
-- **`application/`**: Code implementation functions (under active development)
-  - `qrr_pipeline.py`: Main pipeline function for QRR graduate thesis running the complete analysis
-  - *Additional functions to be added as development progresses*
-
-## Project Structure
-
+```bash
+python -m cross_cluster_matching.application.pipeline --help
 ```
-cross_cluster_matching/
-├── clustering/           # Clustering algorithms and optimization
-├── data/                # Image data processing utilities  
-├── models/              # Feature extraction models
-├── visualization/       # Visualization functions
-├── application/         # Main implementation functions (active development)
-└── __init__.py         # Package initialization
-```
+
+When `--reference_cache_dir` is not supplied, both `--malignant_cells_dir` and `--benign_cells_dir` are required. Save and reuse the generated reference cache for a fixed reference cohort whenever possible.
+
+## Outputs
+
+For each patient, the pipeline writes cluster diagnostics and `matched_malignant_cells/`. The latter contains only candidate images that pass the configured matching rules. It is the designated input for downstream cancer-type inference.
+
+## Reproducibility
+
+Keep the reference cache, feature-extractor weight checksum, normalization values, PCA dimension, matching rules, and package version together with each analysis result. Do not treat reference-cluster indices or thresholds as universal constants: they are specific to the reference cohort and model.

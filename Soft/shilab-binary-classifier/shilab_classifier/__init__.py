@@ -1,19 +1,4 @@
-"""
-ShiLab Binary Classifier
-========================
-
-ShiLab课题组的二分类模型工具包
-
-主要功能:
-- 数据集分割（训练集、验证集、测试集）
-- K折交叉验证数据准备
-- 19个SOTA模型训练
-- 模型评估与性能分析
-- 更多功能开发中...
-
-作者: ShiLab
-版本: 0.3.0
-"""
+"""ShiLab research software utilities."""
 
 __version__ = "0.3.0"
 __author__ = "ShiLab"

@@ -12,12 +12,13 @@ and multi-cancer classification.
 
 ```text
 .
+├── demo/                          # Example SVS inputs for detection-stage validation
 ├── train/                         # Training scripts, from SVS tiling to cancer classification
 ├── Soft/
 │   ├── shilab_pipeline/           # YOLO-based SVS-to-cell-image inference step
 │   ├── shilab-binary-classifier/  # Benign/malignant classifier package
 │   ├── shilab-cluster-algorithm/  # Cluster matching / false-positive removal package
-│   └── shilab-cancer-classifier/  # Multi-cancer classifier package
+│   └── shilab-cancer-classifier/  # Four-class cancer classifier package
 └── models/
     ├── yolo/                      # Cell detection model
     ├── binary-classifier/         # Binary-classification checkpoints
@@ -44,11 +45,10 @@ The training scripts are ordered by stage:
 | 2.2 | `train/step2.2.train_yolo.py` | Train the cell detector |
 | 3 | `train/step3.train_classifier.py` | Train the binary classifier |
 | 4 | `train/step4.top4_models_clustering.py` | Train/evaluate matching models |
-| 5 | `train/step5.train_cancer_classifier.py` | Train the 12-class cancer classifier |
+| 5 | `train/step5.train_cancer_classifier.py` | Train the four-class cancer classifier |
 
-The cancer classes used in `step5` are: `Bile_duct`, `Breast`, `Cervix`,
-`Colorectum`, `Endometrium`, `Esophagus`, `Gastric`, `Mesothelioma`, `NSCLC`,
-`Ovary`, `Pancreas`, and `SCLC`.
+The cancer classes used in `step5` are: `Gastrointestinal_Breast`,
+`Gynecologic`, `Lung`, and `Mesothelioma`.
 
 ## Installation
 
@@ -63,152 +63,209 @@ pip install -e Soft/shilab-cluster-algorithm
 pip install -e Soft/shilab-cancer-classifier
 ```
 
+Steps 3--5 also require the shared `shilab-binary-classifier`,
+`shilab-cluster-algorithm`, and `shilab-cancer-classifier` packages installed
+from the local `Soft/` directory above.
+
 `openslide-python` also requires the native OpenSlide library. On Windows,
 install the OpenSlide binaries and make their DLL directory available on
 `PATH` before processing SVS files.
 
-## Training workflow
+## Run the included demo
 
-Run the following commands from the repository root. The training scripts use
-public placeholder paths such as `/path/to/your/raw_data`; no developer-local
-drive paths are stored in `train/`. Before running a script without command
-line arguments, replace only the path constants at the top of that script with
-your own local paths. Use a new output directory for each experiment: the
-dataset split functions recreate their output folders.
+The repository includes two SVS files in `demo/` (`malignant.svs` and
+`benign.svs`) for validating the streaming SVS-to-cell-detection stage.
+They are example inputs only: no labels, clinical metadata, reference-cell
+library, or expected diagnostic result is supplied.
 
-Install the three local packages once before Steps 3--5:
+## End-to-end inference workflow
+
+Run every command from the repository root. The commands below use
+`malignant.svs` as the example and are equally applicable to
+`benign.svs` after replacing `malignant` in all paths. Output names are
+illustrative; use a fresh output root for each run.
+
+### 1. SVS to candidate cell crops
+
+```bash
+python Soft/shilab_pipeline/application/step1_2_yolo_model_effusion.py \
+  --input_file demo/malignant.svs \
+  --output_dir demo/run_malignant \
+  --model_path models/yolo/best.pt \
+  --grid_size 3 \
+  --read_workers 4 \
+  --yolo_batch_size 8 \
+  --imgsz 1024 \
+  --infer_conf 0.1 \
+  --infer_iou 0.3 \
+  --conf 0.5 \
+  --no_save_json
+```
+
+This is the demo command shown above. Its required hand-off directories are:
+
+```text
+demo/run_malignant/malignant/result/single_cell/
+demo/run_malignant/malignant/result/cluster/
+```
+
+### 2. Binary benign/malignant classification
+
+Use the deployment parameters that correspond to each released checkpoint.
+
+```bash
+python -m shilab_classifier.infer.binary_infer \
+  --model DenseNet161 \
+  --weights models/binary-classifier/densenet161_fold_4.pth \
+  --input demo/run_malignant/malignant/result/single_cell \
+  --output demo/run_malignant/binary_infer/single_cell/malignant \
+  --mean 0.5665 0.7001 0.7650 \
+  --std 0.3161 0.2253 0.1554 \
+  --threshold 0.5 --batch-size 16 --workers 0
+
+python -m shilab_classifier.infer.binary_infer \
+  --model MobileNetV2 \
+  --weights models/binary-classifier/mobilenetv2_fold_2.pth \
+  --input demo/run_malignant/malignant/result/cluster \
+  --output demo/run_malignant/binary_infer/cluster/malignant \
+  --mean 0.6252 0.7208 0.7815 \
+  --std 0.3338 0.2548 0.1815 \
+  --threshold 0.5 --batch-size 16 --workers 0
+```
+
+### 3. Cluster matching and false-positive removal
+
+The package expects a root directory whose immediate children are sample
+directories, each containing `malignant_images/`. `positive_folder_path`
+and `negative_folder_path` only label rows in the output statistics; they do
+not alter matching. For an unlabelled sample, put it below either root and
+provide an existing empty directory (shown as `/path/to/empty_cases`) for the
+other.
+
+```bash
+python -m cross_cluster_matching.application.pipeline \
+  --positive_folder_path demo/run_malignant/binary_infer/single_cell \
+  --negative_folder_path /path/to/empty_cases \
+  --reference_cache_dir /path/to/released_reference_cache/single_cell_densenet161_pca32_top4_article_v1 \
+  --model_path models/cluster/densenet161_fold_4.pth \
+  --base_save_dir demo/run_malignant/cluster_fp_removal/single_cell \
+  --model_type DenseNet161 \
+  --mean 0.5665 0.7001 0.7650 --std 0.3161 0.2253 0.1554 \
+  --malignant_ref_clusters 7,0 \
+  --rules_str "7:0:0.8:3:none@0:7:0.6:3:none" \
+  --use_cell_level_rule_filter
+
+python -m cross_cluster_matching.application.pipeline \
+  --positive_folder_path demo/run_malignant/binary_infer/cluster \
+  --negative_folder_path /path/to/empty_cases \
+  --reference_cache_dir /path/to/released_reference_cache/cluster_mobilenetv2_pca16_top4_article_v1 \
+  --model_path models/cluster/mobilenetv2_fold_2.pth \
+  --base_save_dir demo/run_malignant/cluster_fp_removal/cluster \
+  --model_type MobileNetV2 --pca_dim 16 \
+  --mean 0.6252 0.7208 0.7815 --std 0.3338 0.2548 0.1815 \
+  --malignant_ref_clusters 2,0 --max_candidate_k 10 \
+  --rules_str "2:0:0.65:20:none@0:2:0.5:20:0" \
+  --use_cell_level_rule_filter
+```
+
+The reference cache must match the checkpoint, preprocessing, PCA dimension,
+and reference-cluster IDs in the command. Without a cache, replace
+`--reference_cache_dir` with private `--malignant_cells_dir` and
+`--benign_cells_dir` paths.
+
+For each processed cell type, the retained images are written to:
+
+```text
+demo/run_malignant/cluster_fp_removal/<cell_type>/malignant/matched_malignant_cells/
+```
+
+### 4. Four-class cancer classification
+
+Run this step only for a cell type whose `matched_malignant_cells/` image
+format matches the cancer model's training data. The model has four outputs in
+this exact order: `Gastrointestinal_Breast`, `Gynecologic`, `Lung`, and
+`Mesothelioma`.
+
+```bash
+python -m shilab_cancer_classifier.infer.cancer_infer \
+  --model ViT_L16 \
+  --weights models/cancer-classifier/vit_l16.pth \
+  --input demo/run_malignant/cluster_fp_removal/single_cell/malignant/matched_malignant_cells \
+  --output demo/run_malignant/cancer_infer/single_cell \
+  --classes Gastrointestinal_Breast,Gynecologic,Lung,Mesothelioma \
+  --mean <training_mean_r> <training_mean_g> <training_mean_b> \
+  --std <training_std_r> <training_std_g> <training_std_b> \
+  --threshold 0.5 --batch-size 16 --workers 0
+```
+
+The cancer classifier requires its own fold-specific training `mean` and
+`std`; these values are not interchangeable with the two binary-classifier
+parameter sets above. Do **not** substitute ImageNet defaults. Obtain the
+values from the log of the exact `ViT_L16` checkpoint, replace the six
+placeholders, and retain that log with the released model. Outputs include
+`prediction_results.csv`, patient-level summaries, probability plots, and
+high-confidence image copies.
+
+## Quick start: training
+
+Run the commands from the repository root. Before each script, replace its
+`/path/to/...` settings with your local input and output paths. Steps 3--5
+require the three packages installed from `Soft/`.
 
 ```bash
 pip install -e Soft/shilab-binary-classifier
 pip install -e Soft/shilab-cluster-algorithm
 pip install -e Soft/shilab-cancer-classifier
-```
 
-### Step 1 — extract representative SVS patches
+# 1. Extract SVS patches
+python train/step1.svsSplit.py --input_file /path/to/svs --output_dir /path/to/patches
 
-`train/step1.svsSplit.py` accepts either one `.svs` file or a directory of
-`.svs` files. It reads level-0 pixels and retains the centre patch from each
-`grid_size × grid_size` group; it is therefore a sampling/extraction utility,
-not an exhaustive tiler.
-
-```bash
-python train/step1.svsSplit.py \
-  --input_file /path/to/svs_files \
-  --output_dir /path/to/patches \
-  --size 1024 --overlap 0.05 --grid_size 3 --threads 8
-```
-
-Output PNG patches are written as `/path/to/patches/<slide_name>/tile_<row>_<col>.png`.
-OpenSlide must be installed for this step.
-
-### Step 2.1 — convert LabelMe annotations to a YOLO dataset
-
-Prepare one flat input directory containing image files and LabelMe JSON files
-with matching basenames. Set `input_dir` and `output_dir` at the top of
-`train/step2.1.prepare_dataset.py`, then run:
-
-```bash
+# 2. Prepare annotations and train the YOLO detector
 python train/step2.1.prepare_dataset.py
-```
-
-The script uses a 70%/20%/10% train/validation/test split with seed 42, maps
-`single_cell`, `cluster`, `impurity`, `part`, and `vague` to class IDs 0--4,
-and writes `images/`, YOLO `labels/`, `classes.txt`, `custom.yaml`, and a split
-chart below the output directory. By default `keep_json=True`. For an image
-without a JSON file the script creates an empty LabelMe JSON **in the input
-directory**; use a writable copy of the annotations if that is undesirable.
-
-### Step 2.2 — train the YOLO detector
-
-In `train/step2.2.train_yolo.py`, set `YAML_PATH` to the `custom.yaml` produced
-by Step 2.1 and set `TRAIN_ARGS['project']` to an experiment output directory.
-Optionally replace `MODEL_CONFIG = "yolov12s.yaml"` with a pretrained checkpoint.
-
-```bash
 python train/step2.2.train_yolo.py
-```
 
-The current defaults train for 400 epochs at image size 1024, batch size 8, on
-CUDA device 0. Ultralytics writes the run (including `weights/best.pt`) under
-`<project>/train_exp01/`.
-
-### Step 3 — train and evaluate the benign/malignant classifier
-
-Set `RAW_DATA_DIR`, `BASE_OUTPUT_DIR`, and, if needed,
-`ORIGINAL_BENIGN_TEST_DIR` in `train/step3.train_classifier.py`. The raw data
-root must contain the following folders:
-
-```text
-/path/to/your/raw_data/
-├── benign/
-└── malignant/
-```
-
-Then run:
-
-```bash
+# 3. Train the binary benign/malignant classifier
 python train/step3.train_classifier.py
-```
 
-The script performs a 90% train/validation split, creates five cross-validation
-folds, trains every model in `SUPPORTED_MODELS` for 50 epochs by default, and
-evaluates them on the held-out test set. Outputs include `split_data/`,
-`cross_validation_data/`, `train_val_models/`, and `evaluation_results/` below
-`BASE_OUTPUT_DIR`. To train fewer architectures, replace `MODELS_TO_TRAIN` with
-a list such as `["DenseNet161"]`.
-
-### Step 4 — analyse the top four binary models by reference clustering
-
-This is a post-training model-selection and reference-clustering analysis; it
-does not train a new classifier. Set `MODELS_FOLDER`, `EVALUATION_FOLDER`,
-`OUTPUT_BASE_DIR`, `MALIGNANT_CELLS_DIR`, and `BENIGN_CELLS_DIR` in
-`train/step4.top4_models_clustering.py`, then run:
-
-```bash
+# 4. Build/evaluate the reference clustering used for false-positive removal
 python train/step4.top4_models_clustering.py
-```
 
-`EVALUATION_FOLDER` must contain `top4_models_summary.csv` and each selected
-model's `<ModelName>/<ModelName>_detailed_results.csv`; `MODELS_FOLDER` must
-contain the corresponding `<ModelName>/<modelname>_fold_<n>.pth` files. The
-malignant reference directory may contain `LUAD/`, `LUSC/`, and `SCLC/`
-subdirectories; the benign reference directory contains benign cell images.
-For every selected model, the script reads same-name `.log` normalization
-statistics when available, extracts features, applies PCA plus KMeans, and
-saves reference-cluster visualizations.
-
-### Step 5 — train and evaluate the multi-cancer classifier
-
-Set `RAW_DATA_DIR` and `BASE_OUTPUT_DIR` in
-`train/step5.train_cancer_classifier.py`. The input root must have one image
-folder for each of these exact class names:
-
-```text
-Bile_duct/  Breast/  Cervix/  Colorectum/  Endometrium/  Esophagus/
-Gastric/    Mesothelioma/  NSCLC/  Ovary/  Pancreas/  SCLC/
-```
-
-Run the complete pipeline with:
-
-```bash
+# 5. Train the four-class cancer classifier
 python train/step5.train_cancer_classifier.py
 ```
 
-It validates that every class has at least five images, creates a 90%/10%
-train-validation/test split, generates five folds, trains the architectures in
-`MODELS_TO_TRAIN`, and writes evaluation results. The boolean switches
-`RUN_SPLIT`, `RUN_CV`, `RUN_TRAIN`, and `RUN_EVAL` let you run only the needed
-stage when resuming an experiment.
+| Script | Configure before running |
+| --- | --- |
+| `step2.1.prepare_dataset.py` | `input_dir`, `output_dir` |
+| `step2.2.train_yolo.py` | `YAML_PATH`, `TRAIN_ARGS['project']` |
+| `step3.train_classifier.py` | binary data and output paths |
+| `step4.top4_models_clustering.py` | trained binary models, evaluation results, and reference-cell paths |
+| `step5.train_cancer_classifier.py` | four-class data and output paths |
+
+The Step 5 training data must use these exact folders:
+`Gastrointestinal_Breast/`, `Gynecologic/`, `Lung/`, and
+`Mesothelioma/`.
 
 ## Data, configuration, and checkpoints
 
-No source images, patient information, labels, or reference-cell libraries are
-included. Before running a workflow, configure local paths for:
+The repository includes the two SVS demo inputs described above. No image
+labels, clinical metadata, training source images, or reference-cell libraries
+are included. Before running the full inference workflow, provide and
+configure:
 
-- input SVS files and output directory;
-- the YOLO and Python environments;
-- Step 4 reference-cell folders/cache; and
-- model checkpoints and normalization statistics.
+- an input SVS file and a writable output directory;
+- a Python environment containing the packages in `requirements.txt`, plus the
+  native OpenSlide library;
+- binary-classifier checkpoint architecture, fold-specific `mean`/`std`, and
+  its corresponding training log;
+- Step 4 malignant/benign reference-cell folders or a versioned
+  `reference_cache`, matching rules, and the matching-model checkpoint; and
+- the four-class cancer checkpoint, its fold-specific `mean`/`std`, and
+  training log.
+
+The available repository files are sufficient for the detection demo above,
+but the omitted reference assets and normalization records are required for a
+scientifically reproducible end-to-end prediction.
 
 The packages expose command-line inference entry points. For example, inspect
 their options with:
@@ -220,10 +277,24 @@ python -m cross_cluster_matching.application.pipeline --help
 ```
 
 The multi-cancer inference stage consumes PNG images below the Step 4 output
-folder `matched_malignant_cells/`. The appropriate cancer-model checkpoint is
-not currently present in `models/`; add the released checkpoint together with
-its class order, image-normalization mean, and standard deviation before
-publishing a fully reproducible multi-cancer workflow.
+folder `matched_malignant_cells/`. The released model must have four outputs in
+this exact ImageFolder order: `Gastrointestinal_Breast`, `Gynecologic`,
+`Lung`, and `Mesothelioma`.
+
+```bash
+shilab-cancer-infer \
+  --model ViT_L16 \
+  --weights /path/to/vit_l16.pth \
+  --input /path/to/step4_output \
+  --output /path/to/cancer_inference \
+  --classes Gastrointestinal_Breast Gynecologic Lung Mesothelioma \
+  --mean <training_mean_r> <training_mean_g> <training_mean_b> \
+  --std <training_std_r> <training_std_g> <training_std_b>
+```
+
+Replace the normalization placeholders with the values in the log for the
+specific training fold. Publish the checkpoint and its corresponding log via
+Git LFS or a versioned release before claiming a fully reproducible workflow.
 
 ## Large model files
 
@@ -250,8 +321,9 @@ Git LFS is the recommended way to publish runnable checkpoints.
 
 - Replace every `/path/to/...` placeholder in local copies or a private config;
   do not upload machine-specific paths, account names, or patient identifiers.
-- Add the missing end-to-end runner/configuration template and the released
-  multi-cancer checkpoint metadata if you want one-command reproducibility.
+- Add an end-to-end runner/configuration template, released reference cache,
+  fold-specific normalization logs, and multi-cancer checkpoint metadata to
+  support one-command reproducibility beyond the detection demo.
 - Verify that all model, dataset, and third-party-code licenses permit public
   redistribution.
 - Choose and add a repository license only after all rights holders agree on

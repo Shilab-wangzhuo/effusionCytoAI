@@ -8,19 +8,16 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="shilab-binary-classifier",
-    version="0.1.0",
+    version="0.3.0",
     author="ShiLab",
-    author_email="your.email@example.com",  # 修改为实际邮箱
-    description="ShiLab课题组的二分类模型工具包",
+    description="Tools for binary classification of cytology cell images.",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/shilab/binary-classifier",  # 修改为实际仓库地址
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",

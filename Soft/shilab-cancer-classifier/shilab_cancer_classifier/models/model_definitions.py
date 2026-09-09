@@ -1,9 +1,10 @@
 import torch.nn as nn
 from torchvision import models
 import traceback
+from shilab_cancer_classifier.config import NUM_CLASSES
 
 class CustomAlexNet(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomAlexNet, self).__init__()
         self.alexnet = models.alexnet(pretrained=True)
         in_features = self.alexnet.classifier[6].in_features
@@ -14,7 +15,7 @@ class CustomAlexNet(nn.Module):
 
 
 class CustomResNeXt(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomResNeXt, self).__init__()
         self.resnext = models.resnext50_32x4d(pretrained=True)
         in_features = self.resnext.fc.in_features
@@ -25,7 +26,7 @@ class CustomResNeXt(nn.Module):
 
 
 class CustomConvNextLarge(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomConvNextLarge, self).__init__()
         self.convnext = models.convnext_large(pretrained=True)
         in_features = self.convnext.classifier[2].in_features
@@ -36,18 +37,14 @@ class CustomConvNextLarge(nn.Module):
 
 
 class CustomGoogLeNet(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomGoogLeNet, self).__init__()
-        # 加载预训练的GoogLeNet模型
-        self.googlenet = models.googlenet(pretrained=True,aux_logits=True)
+        self.googlenet = models.googlenet(pretrained=True, aux_logits=True)
         
-        # 修改最后的分类器以适应二分类任务
         in_features = self.googlenet.fc.in_features
         self.googlenet.fc = nn.Linear(in_features, num_classes)
 
-        # 修改辅助分类器
         if hasattr(self.googlenet, 'aux1'):
-            print("self.googlenet.aux1:",self.googlenet.aux1)
             in_features_aux1 = self.googlenet.aux1.fc2.in_features
             self.googlenet.aux1.fc2 = nn.Linear(in_features_aux1, num_classes)
         
@@ -56,11 +53,11 @@ class CustomGoogLeNet(nn.Module):
             self.googlenet.aux2.fc2 = nn.Linear(in_features_aux2, num_classes)
     
     def forward(self, x):
-        return self.googlenet(x)  # 返回所有输出，包括辅助分类器
+        return self.googlenet(x)
 
 
 class CustomResNet50(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomResNet50, self).__init__()
         self.resnet = models.resnet50(pretrained=True)
         in_features = self.resnet.fc.in_features
@@ -71,7 +68,7 @@ class CustomResNet50(nn.Module):
 
 
 class CustomResNet101(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomResNet101, self).__init__()
         self.resnet = models.resnet101(pretrained=True)
         in_features = self.resnet.fc.in_features
@@ -82,7 +79,7 @@ class CustomResNet101(nn.Module):
 
 
 class CustomDenseNet121(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomDenseNet121, self).__init__()
         self.densenet = models.densenet121(pretrained=True)
         in_features = self.densenet.classifier.in_features
@@ -93,7 +90,7 @@ class CustomDenseNet121(nn.Module):
 
 
 class CustomDenseNet161(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomDenseNet161, self).__init__()
         self.densenet = models.densenet161(pretrained=True)
         in_features = self.densenet.classifier.in_features
@@ -104,7 +101,7 @@ class CustomDenseNet161(nn.Module):
 
 
 class CustomVGG16(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomVGG16, self).__init__()
         self.vgg = models.vgg16(pretrained=True)
         in_features = self.vgg.classifier[6].in_features
@@ -115,28 +112,23 @@ class CustomVGG16(nn.Module):
 
 
 class CustomInceptionV3(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomInceptionV3, self).__init__()
-        # 加载预训练的Inception V3模型
         self.inception = models.inception_v3(pretrained=True, aux_logits=True)
         
-        # 修改最后的分类器以适应二分类任务
         in_features = self.inception.fc.in_features
         self.inception.fc = nn.Linear(in_features, num_classes)
 
-        # 修改辅助分类器
         if hasattr(self.inception, 'AuxLogits'):
-            print("self.inception.AuxLogits:",self.inception.AuxLogits)
             in_features_AuxLogits = self.inception.AuxLogits.fc.in_features
             self.inception.AuxLogits.fc = nn.Linear(in_features_AuxLogits, num_classes)
-        
     
     def forward(self, x):
-        return self.inception(x)  # 返回所有输出，包括辅助分类器
+        return self.inception(x)
 
 
 class CustomEfficientNetB0(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomEfficientNetB0, self).__init__()
         self.efficientnet = models.efficientnet_b0(pretrained=True)
         in_features = self.efficientnet.classifier[1].in_features
@@ -147,7 +139,7 @@ class CustomEfficientNetB0(nn.Module):
 
 
 class CustomEfficientNet_v2_l(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomEfficientNet_v2_l, self).__init__()
         self.efficientnet = models.efficientnet_v2_l(pretrained=True)
         in_features = self.efficientnet.classifier[1].in_features
@@ -158,7 +150,7 @@ class CustomEfficientNet_v2_l(nn.Module):
 
 
 class CustomMobileNetV2(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomMobileNetV2, self).__init__()
         self.mobilenet = models.mobilenet_v2(pretrained=True)
         in_features = self.mobilenet.classifier[1].in_features
@@ -169,29 +161,21 @@ class CustomMobileNetV2(nn.Module):
 
 
 class CustomMobileNetV3(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomMobileNetV3, self).__init__()
-        # 加载预训练的MobileNetV3 Large模型
         self.mobilenet = models.mobilenet_v3_large(pretrained=True)
         
-        # 获取原始分类器
         original_classifier = self.mobilenet.classifier
         
-        # 只替换最后一层（输出层）
-        # MobileNetV3的分类器通常是一个包含多个层的Sequential
-        # 我们需要保留除了最后一层之外的所有层
         if isinstance(original_classifier, nn.Sequential):
             layers = list(original_classifier.children())
-            # 假设最后一层是线性层
             if isinstance(layers[-1], nn.Linear):
                 in_features = layers[-1].in_features
-                # 创建新的分类器，保留前面所有层，只替换最后一层
                 new_layers = layers[:-1] + [nn.Linear(in_features, num_classes)]
                 self.mobilenet.classifier = nn.Sequential(*new_layers)
             else:
-                # 如果最后一层不是线性层，打印警告并使用默认方法
-                print("警告: 无法识别MobileNetV3分类器的最后一层，使用完全替换")
-                last_channel = 1280  # MobileNetV3 Large的默认通道数
+                print("Warning: cannot identify the last layer of MobileNetV3 classifier, falling back to full replacement")
+                last_channel = 1280
                 self.mobilenet.classifier = nn.Sequential(
                     nn.Linear(last_channel, 1024),
                     nn.Hardswish(inplace=True),
@@ -199,9 +183,8 @@ class CustomMobileNetV3(nn.Module):
                     nn.Linear(1024, num_classes)
                 )
         else:
-            # 如果分类器不是Sequential，打印警告并使用完全替换
-            print("警告: MobileNetV3分类器不是Sequential类型，使用完全替换")
-            last_channel = 1280  # MobileNetV3 Large的默认通道数
+            print("Warning: MobileNetV3 classifier is not a Sequential, falling back to full replacement")
+            last_channel = 1280
             self.mobilenet.classifier = nn.Sequential(
                 nn.Linear(last_channel, 1024),
                 nn.Hardswish(inplace=True),
@@ -214,7 +197,7 @@ class CustomMobileNetV3(nn.Module):
 
 
 class CustomRegNet(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomRegNet, self).__init__()
         self.regnet = models.regnet_y_400mf(pretrained=True)
         in_features = self.regnet.fc.in_features
@@ -225,7 +208,7 @@ class CustomRegNet(nn.Module):
 
 
 class CustomShuffleNetV2(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomShuffleNetV2, self).__init__()
         self.shufflenet = models.shufflenet_v2_x1_0(pretrained=True)
         in_features = self.shufflenet.fc.in_features
@@ -236,7 +219,7 @@ class CustomShuffleNetV2(nn.Module):
 
 
 class CustomSqueezeNet(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomSqueezeNet, self).__init__()
         self.squeezenet = models.squeezenet1_0(pretrained=True)
         self.squeezenet.classifier[1] = nn.Conv2d(512, num_classes, kernel_size=(1, 1), stride=(1, 1))
@@ -247,7 +230,7 @@ class CustomSqueezeNet(nn.Module):
 
 
 class CustomViT_L16(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomViT_L16, self).__init__()
         self.vit = models.vit_l_16(pretrained=True)
         in_features = self.vit.heads.head.in_features
@@ -258,7 +241,7 @@ class CustomViT_L16(nn.Module):
 
 
 class CustomViT_B16(nn.Module):
-    def __init__(self, num_classes=5):
+    def __init__(self, num_classes=NUM_CLASSES):
         super(CustomViT_B16, self).__init__()
         self.vit = models.vit_b_16(pretrained=True)
         in_features = self.vit.heads.head.in_features
@@ -267,18 +250,8 @@ class CustomViT_B16(nn.Module):
     def forward(self, x):
         return self.vit(x)
 
-# ==================== 模型创建函数 ====================
-def create_model(model_name, num_classes=5):
-    """
-    根据模型名称创建对应的模型实例
-    
-    参数:
-    model_name: 模型名称（字符串）
-    num_classes: 类别数量
-    
-    返回:
-    模型实例
-    """
+def create_model(model_name, num_classes=NUM_CLASSES):
+    """Create a classification model."""
     model_name_lower = model_name.lower()
     
     if 'alexnet' in model_name_lower:
@@ -320,21 +293,12 @@ def create_model(model_name, num_classes=5):
     elif 'vit_b' in model_name_lower or 'vitb' in model_name_lower:
         return CustomViT_B16(num_classes)
     else:
-        print(f"警告: 未知的模型名称 '{model_name}'，使用默认的 ResNeXt")
+        print(f"Warning: unknown model name '{model_name}', falling back to ResNeXt")
         return CustomResNeXt(num_classes)
 
 
-# ==================== 模型信息函数 ====================
 def get_model_info(model_name):
-    """
-    获取模型的基本信息
-    
-    参数:
-    model_name: 模型名称
-    
-    返回:
-    包含模型信息的字典
-    """
+    """Return metadata for a supported model."""
     model = create_model(model_name)
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -346,7 +310,6 @@ def get_model_info(model_name):
         'input_size': 299 if 'Inception' in model_name else 224
     }
 
-# 支持的模型列表
 SUPPORTED_MODELS = [
     'AlexNet', 'ResNeXt', 'ConvNextLarge', 'GoogLeNet',
     'ResNet50', 'ResNet101', 'DenseNet121', 'DenseNet161',
@@ -355,9 +318,7 @@ SUPPORTED_MODELS = [
     'SqueezeNet', 'ViT_B16', 'ViT_L16'
 ]
 
-# ==================== 测试函数 ====================
 if __name__ == "__main__":
-    # 测试所有模型是否能正常创建
     model_list = [
         'AlexNet', 'ResNeXt', 'ConvNextLarge', 'GoogLeNet',
         'ResNet50', 'ResNet101', 'DenseNet121', 'DenseNet161',
@@ -366,11 +327,11 @@ if __name__ == "__main__":
         'SqueezeNet', 'ViT_B16', 'ViT_L16'
     ]
     
-    print("测试所有模型创建...")
+    print("Testing model creation for all models...")
     for model_name in model_list:
         try:
             model = create_model(model_name)
             info = get_model_info(model_name)
-            print(f"✅ {model_name}: {info['total_params']:,} 参数, 输入尺寸: {info['input_size']}x{info['input_size']}")
+            print(f"✅ {model_name}: {info['total_params']:,} params, input size: {info['input_size']}x{info['input_size']}")
         except Exception as e:
             print(f"❌ {model_name}: {e}")

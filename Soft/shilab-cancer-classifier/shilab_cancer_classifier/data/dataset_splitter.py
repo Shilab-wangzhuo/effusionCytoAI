@@ -30,21 +30,7 @@ def clear_directory(directory: str):
 
 def split_dataset(raw_data_dir=None, output_dir=None, class_names=None,
                   split_ratio=0.9, random_seed=42, class_paths=None,
-                  benign_path=None, malignant_path=None):
-    """
-    Split a class-folder image dataset into train_val and test folders.
-
-    Expected multi-class input:
-        raw_data_dir/
-            Breast/
-            GI_Tract/
-            GYN/
-            Lung_cancer/
-            Mesothelioma/
-
-    Backward-compatible binary input is still accepted through benign_path and
-    malignant_path, but new code should use raw_data_dir/class_names.
-    """
+                  benign_path=None, malignant_path=None):    
     if output_dir is None:
         raise ValueError("output_dir must be provided")
 

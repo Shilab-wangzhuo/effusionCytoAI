@@ -10,6 +10,8 @@ from datetime import datetime
 
 import torch
 from shilab_cancer_classifier import (
+    CANCER_CLASSES,
+    NUM_CLASSES,
     SUPPORTED_MODELS,
     evaluate_all_models,
     prepare_cross_validation,
@@ -17,14 +19,6 @@ from shilab_cancer_classifier import (
     train_all_models,
     set_seed,
 )
-
-# ── Class config ──────────────────────────────
-CANCER_CLASSES = [
-    "Bile_duct", "Breast", "Cervix", "Colorectum", "Endometrium",
-    "Esophagus", "Gastric", "Mesothelioma", "NSCLC", "Ovary",
-    "Pancreas", "SCLC",
-]
-NUM_CLASSES = len(CANCER_CLASSES)
 
 # ── Path config ───────────────────────────────
 RAW_DATA_DIR   = Path(r"/path/to/your/raw_data")
