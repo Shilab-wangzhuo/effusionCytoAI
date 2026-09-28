@@ -29,6 +29,8 @@ env/
 /outputs/
 /results/
 /data/
+/demo/run_*/
+/demo/empty_cases/
 /configs/*.local.yaml
 /configs/*.private.yaml
 

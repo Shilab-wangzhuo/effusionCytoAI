@@ -593,7 +593,7 @@ def main():
         print(f"- Skipped background patches                : {skipped_bg}")
         print(f"- Total detections                          : {total_det}")
         print(f"- Detections with conf >= {args.conf}             : {total_det_conf}",
-              + (f" ({total_det_conf/total_det*100:.1f}%)" if total_det > 0 else ""))
+              f" ({total_det_conf/total_det*100:.1f}%)" if total_det > 0 else "")
         print(f"- Removed incomplete single_cell detections : {total_skipped}")
         print(f"- Small single_cell detections              : {total_small}")
         print(f"- Small single_cell with conf >= {args.conf}      : {total_small_c}")

@@ -1,89 +1,95 @@
 # effusionCytoAI
 
-`effusionCytoAI` is a research pipeline for cytology images of pleural and
-peritoneal effusions. It covers slide tiling, cell detection, binary
-benign/malignant classification, false-positive removal by cluster matching,
-and multi-cancer classification.
+`effusionCytoAI` is a research pipeline for pleural and peritoneal effusion
+cytology whole-slide images. It covers slide tiling, cell detection, binary
+benign/malignant classification, clustering-based false-positive removal, and
+four-class cancer classification.
 
-> **Research use only.** This repository is not a medical device and must not
-> be used as the sole basis for clinical diagnosis or treatment decisions.
+> **Research use only.** This software is not a medical device and must not be
+> used as the sole basis for clinical diagnosis or treatment decisions.
 
 ## Repository layout
 
 ```text
 .
-├── demo/                          # Example SVS inputs for detection-stage validation
-├── train/                         # Training scripts, from SVS tiling to cancer classification
+├── demo/                          # Example SVS inputs
+├── train/                         # Training scripts for all workflow stages
 ├── Soft/
-│   ├── shilab_pipeline/           # YOLO-based SVS-to-cell-image inference step
+│   ├── shilab_pipeline/           # YOLO-based SVS-to-cell-image inference
 │   ├── shilab-binary-classifier/  # Benign/malignant classifier package
-│   ├── shilab-cluster-algorithm/  # Cluster matching / false-positive removal package
+│   ├── shilab-cluster-algorithm/  # Cluster matching / false-positive removal
 │   └── shilab-cancer-classifier/  # Four-class cancer classifier package
-└── models/
-    ├── yolo/                      # Cell detection model
-    ├── binary-classifier/         # Binary-classification checkpoints
-    └── cluster/                   # Checkpoints used by the matching workflow
+├── models/
+│   ├── yolo/                      # Cell-detection checkpoint
+│   ├── binary-classifier/         # Binary-classification checkpoints
+│   ├── cluster/                   # Matching checkpoints and reference caches
+│   └── cancer-classifier/         # Four-class cancer checkpoint
+├── environment.yml                # Reproducible server inference environment
+└── requirements.txt               # Pinned direct pip dependencies
 ```
 
 ## Workflow
 
 ```text
 SVS whole-slide image
-  → tile extraction and YOLO detection
+  → patch extraction and YOLO detection
   → benign/malignant classification
   → cluster matching and false-positive removal
   → matched_malignant_cells/*.png
-  → multi-cancer classification
+  → four-class cancer classification
 ```
-
-The training scripts are ordered by stage:
 
 | Stage | Script | Purpose |
 | --- | --- | --- |
-| 1 | `train/step1.svsSplit.py` | Split SVS images into patches |
-| 2.1 | `train/step2.1.prepare_dataset.py` | Prepare a YOLO dataset |
+| 1 | `train/step1.svsSplit.py` | Extract representative patches from SVS slides |
+| 2.1 | `train/step2.1.prepare_dataset.py` | Convert annotations into a YOLO dataset |
 | 2.2 | `train/step2.2.train_yolo.py` | Train the cell detector |
 | 3 | `train/step3.train_classifier.py` | Train the binary classifier |
-| 4 | `train/step4.top4_models_clustering.py` | Train/evaluate matching models |
+| 4 | `train/step4.top4_models_clustering.py` | Build and evaluate reference-cell clustering models |
 | 5 | `train/step5.train_cancer_classifier.py` | Train the four-class cancer classifier |
 
-The cancer classes used in `step5` are: `Gastrointestinal_Breast`,
+The cancer classes, in model-output order, are `Gastrointestinal_Breast`,
 `Gynecologic`, `Lung`, and `Mesothelioma`.
 
 ## Installation
 
-Use a supported Python version (the code was developed with Python 3.10 or a
-compatible version). Install PyTorch and TorchVision builds that match your
-CUDA/driver environment first, then install the remaining dependencies:
+The released end-to-end inference workflow was run on the server in a single
+`patho_pipeline` environment. Create the same environment with:
 
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate patho_pipeline
+```
+
+Install the repository versions of the three local packages:
+
+```bash
 pip install -e Soft/shilab-binary-classifier
 pip install -e Soft/shilab-cluster-algorithm
 pip install -e Soft/shilab-cancer-classifier
 ```
 
-Steps 3--5 also require the shared `shilab-binary-classifier`,
-`shilab-cluster-algorithm`, and `shilab-cancer-classifier` packages installed
-from the local `Soft/` directory above.
+`environment.yml` is the authoritative specification for the released
+inference workflow. `requirements.txt` contains the corresponding pinned
+direct pip dependencies for users who manage native libraries separately.
+`openslide-python` requires the native OpenSlide library; the Conda environment
+installs OpenSlide 4.0.1.
 
-`openslide-python` also requires the native OpenSlide library. On Windows,
-install the OpenSlide binaries and make their DLL directory available on
-`PATH` before processing SVS files.
+The workflow was validated on CentOS Linux 7 with an NVIDIA GeForce RTX 3080
+(10 GB), NVIDIA driver 550.54.14, Python 3.10.20, PyTorch 2.2.1 with CUDA 11.8,
+TorchVision 0.17.1, Ultralytics 8.3.63, NumPy 1.26.4, pandas 2.0.3,
+scikit-learn 1.3.0, SciPy 1.10.1, OpenCV 4.9.0, OpenSlide 4.0.1,
+openslide-python 1.4.1, UMAP-learn 0.5.7, and Supervision 0.25.1.
 
 ## Run the included demo
 
-The repository includes two SVS files in `demo/` (`malignant.svs` and
-`benign.svs`) for validating the streaming SVS-to-cell-detection stage.
-They are example inputs only: no labels, clinical metadata, reference-cell
-library, or expected diagnostic result is supplied.
+The repository includes `demo/malignant.svs` and `demo/benign.svs`. The
+commands below use `malignant.svs`; replace `malignant` with `benign` in the
+input and output paths to process the other slide. Run all commands from the
+repository root. The slides are example inputs and do not include diagnostic
+labels or clinical metadata.
 
-## End-to-end inference workflow
-
-Run every command from the repository root. The commands below use
-`malignant.svs` as the example and are equally applicable to
-`benign.svs` after replacing `malignant` in all paths. Output names are
-illustrative; use a fresh output root for each run.
+## End-to-end inference
 
 ### 1. SVS to candidate cell crops
 
@@ -92,7 +98,7 @@ python Soft/shilab_pipeline/application/step1_2_yolo_model_effusion.py \
   --input_file demo/malignant.svs \
   --output_dir demo/run_malignant \
   --model_path models/yolo/best.pt \
-  --grid_size 3 \
+  --grid_size 1 \
   --read_workers 4 \
   --yolo_batch_size 8 \
   --imgsz 1024 \
@@ -102,7 +108,7 @@ python Soft/shilab_pipeline/application/step1_2_yolo_model_effusion.py \
   --no_save_json
 ```
 
-This is the demo command shown above. Its required hand-off directories are:
+The directories passed to the next stage are:
 
 ```text
 demo/run_malignant/malignant/result/single_cell/
@@ -111,8 +117,6 @@ demo/run_malignant/malignant/result/cluster/
 
 ### 2. Binary benign/malignant classification
 
-Use the deployment parameters that correspond to each released checkpoint.
-
 ```bash
 python -m shilab_classifier.infer.binary_infer \
   --model DenseNet161 \
@@ -120,8 +124,7 @@ python -m shilab_classifier.infer.binary_infer \
   --input demo/run_malignant/malignant/result/single_cell \
   --output demo/run_malignant/binary_infer/single_cell/malignant \
   --mean 0.5665 0.7001 0.7650 \
-  --std 0.3161 0.2253 0.1554 \
-  --threshold 0.5 --batch-size 16 --workers 0
+  --std 0.3161 0.2253 0.1554
 
 python -m shilab_classifier.infer.binary_infer \
   --model MobileNetV2 \
@@ -129,62 +132,62 @@ python -m shilab_classifier.infer.binary_infer \
   --input demo/run_malignant/malignant/result/cluster \
   --output demo/run_malignant/binary_infer/cluster/malignant \
   --mean 0.6252 0.7208 0.7815 \
-  --std 0.3338 0.2548 0.1815 \
-  --threshold 0.5 --batch-size 16 --workers 0
+  --std 0.3338 0.2548 0.1815
 ```
+
+Each output directory contains `prediction_results.csv`, a probability plot,
+and `malignant_images/` containing images retained as malignant.
 
 ### 3. Cluster matching and false-positive removal
 
-The package expects a root directory whose immediate children are sample
-directories, each containing `malignant_images/`. `positive_folder_path`
-and `negative_folder_path` only label rows in the output statistics; they do
-not alter matching. For an unlabelled sample, put it below either root and
-provide an existing empty directory (shown as `/path/to/empty_cases`) for the
-other.
+The matching program expects each immediate child of
+`positive_folder_path` or `negative_folder_path` to be a sample directory
+containing `malignant_images/`. For this unlabelled demo, the sample is placed
+below the positive root and an empty negative root is created. These roots
+only label summary rows; they do not change the matching algorithm.
 
 ```bash
+mkdir -p demo/empty_cases
+
 python -m cross_cluster_matching.application.pipeline \
   --positive_folder_path demo/run_malignant/binary_infer/single_cell \
-  --negative_folder_path /path/to/empty_cases \
-  --reference_cache_dir /path/to/released_reference_cache/single_cell_densenet161_pca32_top4_article_v1 \
+  --negative_folder_path demo/empty_cases \
+  --reference_cache_dir models/cluster/reference_cache/single_cell_densenet161_pca32_top4_article_v1 \
   --model_path models/cluster/densenet161_fold_4.pth \
   --base_save_dir demo/run_malignant/cluster_fp_removal/single_cell \
   --model_type DenseNet161 \
-  --mean 0.5665 0.7001 0.7650 --std 0.3161 0.2253 0.1554 \
+  --mean 0.5665 0.7001 0.7650 \
+  --std 0.3161 0.2253 0.1554 \
   --malignant_ref_clusters 7,0 \
   --rules_str "7:0:0.8:3:none@0:7:0.6:3:none" \
   --use_cell_level_rule_filter
 
 python -m cross_cluster_matching.application.pipeline \
   --positive_folder_path demo/run_malignant/binary_infer/cluster \
-  --negative_folder_path /path/to/empty_cases \
-  --reference_cache_dir /path/to/released_reference_cache/cluster_mobilenetv2_pca16_top4_article_v1 \
+  --negative_folder_path demo/empty_cases \
+  --reference_cache_dir models/cluster/reference_cache/cluster_mobilenetv2_pca16_top4_article_v1 \
   --model_path models/cluster/mobilenetv2_fold_2.pth \
   --base_save_dir demo/run_malignant/cluster_fp_removal/cluster \
-  --model_type MobileNetV2 --pca_dim 16 \
-  --mean 0.6252 0.7208 0.7815 --std 0.3338 0.2548 0.1815 \
-  --malignant_ref_clusters 2,0 --max_candidate_k 10 \
+  --model_type MobileNetV2 \
+  --pca_dim 16 \
+  --mean 0.6252 0.7208 0.7815 \
+  --std 0.3338 0.2548 0.1815 \
+  --malignant_ref_clusters 2,0 \
   --rules_str "2:0:0.65:20:none@0:2:0.5:20:0" \
   --use_cell_level_rule_filter
 ```
 
-The reference cache must match the checkpoint, preprocessing, PCA dimension,
-and reference-cluster IDs in the command. Without a cache, replace
-`--reference_cache_dir` with private `--malignant_cells_dir` and
-`--benign_cells_dir` paths.
-
-For each processed cell type, the retained images are written to:
+The final retained images are written to:
 
 ```text
-demo/run_malignant/cluster_fp_removal/<cell_type>/malignant/matched_malignant_cells/
+demo/run_malignant/cluster_fp_removal/single_cell/malignant/matched_malignant_cells/
+demo/run_malignant/cluster_fp_removal/cluster/malignant/matched_malignant_cells/
 ```
 
 ### 4. Four-class cancer classification
 
-Run this step only for a cell type whose `matched_malignant_cells/` image
-format matches the cancer model's training data. The model has four outputs in
-this exact order: `Gastrointestinal_Breast`, `Gynecologic`, `Lung`, and
-`Mesothelioma`.
+The released Fold 3 `ViT_L16` checkpoint uses the following exact class order
+and fold-specific normalization values:
 
 ```bash
 python -m shilab_cancer_classifier.infer.cancer_infer \
@@ -192,32 +195,26 @@ python -m shilab_cancer_classifier.infer.cancer_infer \
   --weights models/cancer-classifier/vit_l16.pth \
   --input demo/run_malignant/cluster_fp_removal/single_cell/malignant/matched_malignant_cells \
   --output demo/run_malignant/cancer_infer/single_cell \
-  --classes Gastrointestinal_Breast,Gynecologic,Lung,Mesothelioma \
-  --mean <training_mean_r> <training_mean_g> <training_mean_b> \
-  --std <training_std_r> <training_std_g> <training_std_b> \
-  --threshold 0.5 --batch-size 16 --workers 0
+  --classes Gastrointestinal_Breast Gynecologic Lung Mesothelioma \
+  --mean 0.4908 0.5972 0.6659 \
+  --std 0.3262 0.2490 0.1852 \
+  --threshold 0.5 --batch-size 4 --workers 0
 ```
 
-The cancer classifier requires its own fold-specific training `mean` and
-`std`; these values are not interchangeable with the two binary-classifier
-parameter sets above. Do **not** substitute ImageNet defaults. Obtain the
-values from the log of the exact `ViT_L16` checkpoint, replace the six
-placeholders, and retain that log with the released model. Outputs include
-`prediction_results.csv`, patient-level summaries, probability plots, and
-high-confidence image copies.
+Outputs include `prediction_results.csv`, patient-level summaries,
+probability plots, and high-confidence image copies. Run this stage only on
+the single-cell `matched_malignant_cells/` output, which matches the cancer
+model's training image type.
 
 ## Quick start: training
 
-Run the commands from the repository root. Before each script, replace its
-`/path/to/...` settings with your local input and output paths. Steps 3--5
-require the three packages installed from `Soft/`.
+The released models were trained locally. YOLO development used Python 3.11.11,
+PyTorch 2.5.1 with CUDA 12.1, and Ultralytics 8.3.63; binary-classifier,
+reference-clustering, and cancer-classifier development used PyTorch 2.2.1
+with CUDA 11.8 and TorchVision 0.17.1.
 
 ```bash
-pip install -e Soft/shilab-binary-classifier
-pip install -e Soft/shilab-cluster-algorithm
-pip install -e Soft/shilab-cancer-classifier
-
-# 1. Extract SVS patches
+# 1. Extract representative SVS patches
 python train/step1.svsSplit.py --input_file /path/to/svs --output_dir /path/to/patches
 
 # 2. Prepare annotations and train the YOLO detector
@@ -227,7 +224,7 @@ python train/step2.2.train_yolo.py
 # 3. Train the binary benign/malignant classifier
 python train/step3.train_classifier.py
 
-# 4. Build/evaluate the reference clustering used for false-positive removal
+# 4. Build and evaluate reference-cell clustering
 python train/step4.top4_models_clustering.py
 
 # 5. Train the four-class cancer classifier
@@ -238,93 +235,34 @@ python train/step5.train_cancer_classifier.py
 | --- | --- |
 | `step2.1.prepare_dataset.py` | `input_dir`, `output_dir` |
 | `step2.2.train_yolo.py` | `YAML_PATH`, `TRAIN_ARGS['project']` |
-| `step3.train_classifier.py` | binary data and output paths |
-| `step4.top4_models_clustering.py` | trained binary models, evaluation results, and reference-cell paths |
-| `step5.train_cancer_classifier.py` | four-class data and output paths |
+| `step3.train_classifier.py` | raw binary dataset and output paths |
+| `step4.top4_models_clustering.py` | trained binary models, evaluation results, and effusion reference-cell paths |
+| `step5.train_cancer_classifier.py` | four-class dataset and output paths |
 
-The Step 5 training data must use these exact folders:
-`Gastrointestinal_Breast/`, `Gynecologic/`, `Lung/`, and
-`Mesothelioma/`.
+Step 3 expects `benign/` and `malignant/` directories. Step 5 expects the
+four class directories listed above. These scripts intentionally require the
+user to set project-specific data and output paths before running.
 
 ## Data, configuration, and checkpoints
 
-The repository includes the two SVS demo inputs described above. No image
-labels, clinical metadata, training source images, or reference-cell libraries
-are included. Before running the full inference workflow, provide and
-configure:
+The repository supplies example SVS inputs, all inference checkpoints, and
+frozen reference caches for both single cells and cell clusters. The caches
+contain the fixed numerical representations required by the matching
+algorithm; the original reference images are not required for inference.
 
-- an input SVS file and a writable output directory;
-- a Python environment containing the packages in `requirements.txt`, plus the
-  native OpenSlide library;
-- binary-classifier checkpoint architecture, fold-specific `mean`/`std`, and
-  its corresponding training log;
-- Step 4 malignant/benign reference-cell folders or a versioned
-  `reference_cache`, matching rules, and the matching-model checkpoint; and
-- the four-class cancer checkpoint, its fold-specific `mean`/`std`, and
-  training log.
+Training source images, clinical metadata, and patient-level annotations are
+not distributed. Users training new models must recalculate normalization
+statistics and keep the model architecture, class order, reference cache,
+cluster IDs, and matching rules synchronized with each new checkpoint.
 
-The available repository files are sufficient for the detection demo above,
-but the omitted reference assets and normalization records are required for a
-scientifically reproducible end-to-end prediction.
-
-The packages expose command-line inference entry points. For example, inspect
-their options with:
-
-```bash
-python -m shilab_classifier.infer.binary_infer --help
-python -m shilab_cancer_classifier.infer.cancer_infer --help
-python -m cross_cluster_matching.application.pipeline --help
-```
-
-The multi-cancer inference stage consumes PNG images below the Step 4 output
-folder `matched_malignant_cells/`. The released model must have four outputs in
-this exact ImageFolder order: `Gastrointestinal_Breast`, `Gynecologic`,
-`Lung`, and `Mesothelioma`.
-
-```bash
-shilab-cancer-infer \
-  --model ViT_L16 \
-  --weights /path/to/vit_l16.pth \
-  --input /path/to/step4_output \
-  --output /path/to/cancer_inference \
-  --classes Gastrointestinal_Breast Gynecologic Lung Mesothelioma \
-  --mean <training_mean_r> <training_mean_g> <training_mean_b> \
-  --std <training_std_r> <training_std_g> <training_std_b>
-```
-
-Replace the normalization placeholders with the values in the log for the
-specific training fold. Publish the checkpoint and its corresponding log via
-Git LFS or a versioned release before claiming a fully reproducible workflow.
-
-## Large model files
-
-The repository contains model checkpoints larger than GitHub's ordinary Git
-file-size limit. Install and use Git LFS before committing them:
+Model checkpoints and SVS demo files are stored with Git LFS. Install Git LFS
+before cloning or downloading these assets:
 
 ```bash
 git lfs install
-git lfs track "*.pt" "*.pth"
-git add .gitattributes models/
+git lfs pull
 ```
 
-Alternatively, publish checkpoints as versioned GitHub Release assets and
-document their download locations here. Do not commit raw clinical data or
-private reference images.
-
-For reference, the 102.21 MiB DenseNet161 checkpoint was tested with ZIP
-compression and became 97.48 MiB, so an archive can fit below GitHub's 100 MiB
-ordinary-Git file limit. This is only a fallback: users must extract the archive
-before inference, and the original `.pth` must not be committed alongside it.
-Git LFS is the recommended way to publish runnable checkpoints.
-
-## Before public release
-
-- Replace every `/path/to/...` placeholder in local copies or a private config;
-  do not upload machine-specific paths, account names, or patient identifiers.
-- Add an end-to-end runner/configuration template, released reference cache,
-  fold-specific normalization logs, and multi-cancer checkpoint metadata to
-  support one-command reproducibility beyond the detection demo.
-- Verify that all model, dataset, and third-party-code licenses permit public
-  redistribution.
-- Choose and add a repository license only after all rights holders agree on
-  it. Until then, no permission to reuse the code is granted by this repository.
+Verify that all model, dataset, and third-party-code licenses permit the
+intended use. A repository license should be added only after all rights
+holders agree on the redistribution terms.
