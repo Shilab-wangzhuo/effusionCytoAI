@@ -5,9 +5,6 @@ cytology whole-slide images. It covers slide tiling, cell detection, binary
 benign/malignant classification, clustering-based false-positive removal, and
 four-class cancer classification.
 
-> **Research use only.** This software is not a medical device and must not be
-> used as the sole basis for clinical diagnosis or treatment decisions.
-
 ## Repository layout
 
 ```text
@@ -186,7 +183,7 @@ demo/run_malignant/cluster_fp_removal/cluster/malignant/matched_malignant_cells/
 
 ### 4. Four-class cancer classification
 
-The released Fold 3 `ViT_L16` checkpoint uses the following exact class order
+The released `ViT_L16` checkpoint uses the following exact class order
 and fold-specific normalization values:
 
 ```bash
@@ -240,8 +237,7 @@ python train/step5.train_cancer_classifier.py
 | `step5.train_cancer_classifier.py` | four-class dataset and output paths |
 
 Step 3 expects `benign/` and `malignant/` directories. Step 5 expects the
-four class directories listed above. These scripts intentionally require the
-user to set project-specific data and output paths before running.
+four class directories listed above.
 
 ## Data, configuration, and checkpoints
 
@@ -252,17 +248,4 @@ algorithm; the original reference images are not required for inference.
 
 Training source images, clinical metadata, and patient-level annotations are
 not distributed. Users training new models must recalculate normalization
-statistics and keep the model architecture, class order, reference cache,
-cluster IDs, and matching rules synchronized with each new checkpoint.
-
-Model checkpoints and SVS demo files are stored with Git LFS. Install Git LFS
-before cloning or downloading these assets:
-
-```bash
-git lfs install
-git lfs pull
-```
-
-Verify that all model, dataset, and third-party-code licenses permit the
-intended use. A repository license should be added only after all rights
-holders agree on the redistribution terms.
+statistics.
