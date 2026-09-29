@@ -12,7 +12,11 @@ four-class cancer classification.
 ├── demo/                          # Example SVS inputs
 ├── train/                         # Training scripts for all workflow stages
 ├── Soft/
-│   ├── shilab_pipeline/           # YOLO-based SVS-to-cell-image inference
+│   ├── shilab_pipeline/           # SVS-to-cell-image inference
+│   │   └── application/
+│   │       ├── step1_2_yolo_model_effusion.py
+│   │       ├── clinical_weighting.py
+│   │       └── prepare_input.py
 │   ├── shilab-binary-classifier/  # Benign/malignant classifier package
 │   ├── shilab-cluster-algorithm/  # Cluster matching / false-positive removal
 │   └── shilab-cancer-classifier/  # Four-class cancer classifier package
@@ -202,6 +206,26 @@ Outputs include `prediction_results.csv`, patient-level summaries,
 probability plots, and high-confidence image copies. Run this stage only on
 the single-cell `matched_malignant_cells/` output, which matches the cancer
 model's training image type.
+
+### 5. Specimen-level clinical weighting and cancer-origin ranking
+
+Prepare a metadata CSV for the evaluation cohort with columns
+`sample,patient_id,reference_class,sex,effusion_type,eligible`.
+
+```bash
+python Soft/shilab_pipeline/application/prepare_input.py \
+  --summary /path/to/evaluation/patient_summary.csv \
+  --metadata /path/to/evaluation/metadata.csv \
+  --output /path/to/evaluation/clinical_input.csv
+
+python Soft/shilab_pipeline/application/clinical_weighting.py evaluate \
+  --input /path/to/evaluation/clinical_input.csv \
+  --weights models/cancer-classifier/weights.json \
+  --output /path/to/evaluation/clinical_weighting_results
+```
+
+The evaluator applies the locked weights without fitting or tuning and writes
+specimen-level rankings and comparison metrics.
 
 ## Quick start: training
 

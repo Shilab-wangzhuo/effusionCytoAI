@@ -1,0 +1,20 @@
+{
+  "selected": {
+    "rule_id": "M0_A0.05_P0.5",
+    "male_gyn_weight": 0,
+    "ascites_lung_weight": 0.05,
+    "pleural_gyn_weight": 0.5
+  },
+  "previous": {
+    "rule_id": "M0_A0.05_P0.5",
+    "male_gyn_weight": 0,
+    "ascites_lung_weight": 0.05,
+    "pleural_gyn_weight": 0.5
+  },
+  "changed": false,
+  "seed": 42,
+  "discovery_n": 205,
+  "selection": "三类平均召回率、Top1准确率、较轻调整、较大腹水肺癌权重、较大胸水妇科权重",
+  "grid_40": 40,
+  "selection_candidates": 20
+}
